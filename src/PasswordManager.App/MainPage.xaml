@@ -1,0 +1,330 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="PasswordManager.App.MainPage"
+             BackgroundColor="#F6F7F4">
+    <ContentPage.Resources>
+        <Style x:Key="Panel" TargetType="Border">
+            <Setter Property="Stroke" Value="#D5D9D0" />
+            <Setter Property="StrokeThickness" Value="1" />
+            <Setter Property="BackgroundColor" Value="#FFFFFF" />
+            <Setter Property="Padding" Value="18" />
+            <Setter Property="StrokeShape">
+                <Setter.Value>
+                    <RoundRectangle CornerRadius="8" />
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="FontAttributes" Value="Bold" />
+            <Setter Property="BackgroundColor" Value="#1F7A5C" />
+            <Setter Property="TextColor" Value="#FFFFFF" />
+        </Style>
+        <Style x:Key="SecondaryButton" TargetType="Button">
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="BackgroundColor" Value="#E7EAE2" />
+            <Setter Property="TextColor" Value="#20231F" />
+        </Style>
+        <Style x:Key="DangerButton" TargetType="Button">
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="BackgroundColor" Value="#A94438" />
+            <Setter Property="TextColor" Value="#FFFFFF" />
+        </Style>
+        <Style TargetType="Entry">
+            <Setter Property="BackgroundColor" Value="#FFFFFF" />
+            <Setter Property="TextColor" Value="#20231F" />
+            <Setter Property="PlaceholderColor" Value="#767D72" />
+        </Style>
+        <Style TargetType="Editor">
+            <Setter Property="BackgroundColor" Value="#FFFFFF" />
+            <Setter Property="TextColor" Value="#20231F" />
+            <Setter Property="PlaceholderColor" Value="#767D72" />
+        </Style>
+    </ContentPage.Resources>
+
+    <Grid Padding="24"
+          RowDefinitions="Auto,*"
+          RowSpacing="18">
+        <Grid ColumnDefinitions="*,Auto,Auto"
+              ColumnSpacing="12"
+              VerticalOptions="Center">
+            <VerticalStackLayout Spacing="4">
+                <Label Text="Password Manager Vault"
+                       FontSize="26"
+                       FontAttributes="Bold"
+                       TextColor="#20231F" />
+                <Label x:Name="StatusPathLabel"
+                       Text="No vault selected"
+                       FontSize="13"
+                       TextColor="#596157"
+                       LineBreakMode="TailTruncation" />
+            </VerticalStackLayout>
+
+            <Border Grid.Column="1"
+                    Padding="10,6"
+                    BackgroundColor="#E7EAE2"
+                    Stroke="#D5D9D0"
+                    StrokeThickness="1">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="8" />
+                </Border.StrokeShape>
+                <Label x:Name="StatusBadge"
+                       Text="No vault"
+                       FontSize="12"
+                       FontAttributes="Bold"
+                       TextColor="#20231F" />
+            </Border>
+
+            <Border x:Name="UnsavedBadge"
+                    Grid.Column="2"
+                    Padding="10,6"
+                    BackgroundColor="#F4E8D7"
+                    Stroke="#D6B47B"
+                    StrokeThickness="1"
+                    IsVisible="False">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="8" />
+                </Border.StrokeShape>
+                <Label Text="Unsaved"
+                       FontSize="12"
+                       FontAttributes="Bold"
+                       TextColor="#7B4A16" />
+            </Border>
+        </Grid>
+
+        <Label x:Name="FeedbackLabel"
+               Grid.Row="0"
+               HorizontalOptions="End"
+               VerticalOptions="End"
+               Margin="0,0,0,-18"
+               FontSize="13"
+               TextColor="#596157"
+               LineBreakMode="TailTruncation" />
+
+        <Grid Grid.Row="1">
+            <Border x:Name="StartPanel"
+                    Style="{StaticResource Panel}"
+                    WidthRequest="520"
+                    HorizontalOptions="Center"
+                    VerticalOptions="Center">
+                <VerticalStackLayout Spacing="16">
+                    <Label Text="Create or open a vault"
+                           FontSize="22"
+                           FontAttributes="Bold"
+                           TextColor="#20231F" />
+                    <Label Text="Use a local encrypted KDBX vault. Keep the master password private; it is required to unlock and save."
+                           FontSize="14"
+                           TextColor="#596157" />
+                    <Entry x:Name="CreatePasswordEntry"
+                           Placeholder="Master password for new vault"
+                           IsPassword="True"
+                           ReturnType="Done" />
+                    <Grid ColumnDefinitions="*,*"
+                          ColumnSpacing="12">
+                        <Button Text="Create vault"
+                                Clicked="OnCreateVaultClicked" />
+                        <Button Grid.Column="1"
+                                Text="Open vault"
+                                Style="{StaticResource SecondaryButton}"
+                                Clicked="OnOpenVaultClicked" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+            <Border x:Name="UnlockPanel"
+                    Style="{StaticResource Panel}"
+                    WidthRequest="520"
+                    HorizontalOptions="Center"
+                    VerticalOptions="Center"
+                    IsVisible="False">
+                <VerticalStackLayout Spacing="16">
+                    <Label x:Name="UnlockTitleLabel"
+                           Text="Unlock vault"
+                           FontSize="22"
+                           FontAttributes="Bold"
+                           TextColor="#20231F" />
+                    <Label x:Name="UnlockPathLabel"
+                           FontSize="13"
+                           TextColor="#596157"
+                           LineBreakMode="TailTruncation" />
+                    <Entry x:Name="UnlockPasswordEntry"
+                           Placeholder="Master password"
+                           IsPassword="True"
+                           ReturnType="Done"
+                           Completed="OnUnlockPasswordCompleted" />
+                    <Grid ColumnDefinitions="*,*"
+                          ColumnSpacing="12">
+                        <Button Text="Unlock"
+                                Clicked="OnUnlockVaultClicked" />
+                        <Button Grid.Column="1"
+                                Text="Choose another"
+                                Style="{StaticResource SecondaryButton}"
+                                Clicked="OnChooseAnotherVaultClicked" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+            <Grid x:Name="DashboardPanel"
+                  ColumnDefinitions="220,*,380"
+                  ColumnSpacing="18"
+                  IsVisible="False">
+                <Border Style="{StaticResource Panel}">
+                    <VerticalStackLayout Spacing="12">
+                        <Label Text="Vault"
+                               FontSize="18"
+                               FontAttributes="Bold"
+                               TextColor="#20231F" />
+                        <Button x:Name="SaveVaultButton"
+                                Text="Save"
+                                Clicked="OnSaveVaultClicked" />
+                        <Button Text="Lock"
+                                Style="{StaticResource SecondaryButton}"
+                                Clicked="OnLockVaultClicked" />
+                        <Button Text="Close"
+                                Style="{StaticResource SecondaryButton}"
+                                Clicked="OnCloseVaultClicked" />
+                        <BoxView HeightRequest="1"
+                                 Color="#D5D9D0"
+                                 Margin="0,8" />
+                        <Label Text="Filters"
+                               FontSize="14"
+                               FontAttributes="Bold"
+                               TextColor="#596157" />
+                        <Label Text="All items"
+                               TextColor="#20231F" />
+                        <Label Text="Favorites"
+                               TextColor="#596157" />
+                        <Label Text="Tags"
+                               TextColor="#596157" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <Border Grid.Column="1"
+                        Style="{StaticResource Panel}">
+                    <Grid RowDefinitions="Auto,*"
+                          RowSpacing="14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="12">
+                            <Entry x:Name="SearchEntry"
+                                   Placeholder="Search accounts"
+                                   TextChanged="OnSearchTextChanged" />
+                            <Button Grid.Column="1"
+                                    Text="New"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Clicked="OnAddNewEntryClicked" />
+                        </Grid>
+
+                        <Grid Grid.Row="1">
+                            <CollectionView x:Name="EntryCollection"
+                                            SelectionMode="Single"
+                                            SelectionChanged="OnEntrySelectionChanged">
+                                <CollectionView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,0,0,8"
+                                                Padding="12"
+                                                BackgroundColor="#F9FAF7"
+                                                Stroke="#D5D9D0"
+                                                StrokeThickness="1">
+                                            <Border.StrokeShape>
+                                                <RoundRectangle CornerRadius="8" />
+                                            </Border.StrokeShape>
+                                            <Grid RowDefinitions="Auto,Auto"
+                                                  ColumnDefinitions="*,Auto"
+                                                  RowSpacing="4">
+                                                <Label Text="{Binding ServiceName}"
+                                                       FontAttributes="Bold"
+                                                       TextColor="#20231F"
+                                                       LineBreakMode="TailTruncation" />
+                                                <Label Grid.Column="1"
+                                                       Text="Favorite"
+                                                       FontSize="11"
+                                                       TextColor="#1F7A5C"
+                                                       IsVisible="{Binding IsFavorite}" />
+                                                <Label Grid.Row="1"
+                                                       Grid.ColumnSpan="2"
+                                                       Text="{Binding UsernameOrEmail}"
+                                                       FontSize="13"
+                                                       TextColor="#596157"
+                                                       LineBreakMode="TailTruncation" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </CollectionView.ItemTemplate>
+                            </CollectionView>
+
+                            <Label x:Name="EmptyListLabel"
+                                   Text="No entries yet"
+                                   HorizontalOptions="Center"
+                                   VerticalOptions="Center"
+                                   TextColor="#596157"
+                                   IsVisible="False" />
+                        </Grid>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Column="2"
+                        Style="{StaticResource Panel}">
+                    <ScrollView>
+                        <VerticalStackLayout Spacing="12">
+                            <Label x:Name="DetailTitleLabel"
+                                   Text="New entry"
+                                   FontSize="20"
+                                   FontAttributes="Bold"
+                                   TextColor="#20231F" />
+                            <Label x:Name="DetailUsernameLabel"
+                                   Text="Fill the required fields, then add or update."
+                                   FontSize="13"
+                                   TextColor="#596157"
+                                   LineBreakMode="TailTruncation" />
+
+                            <Entry x:Name="ServiceNameEntry"
+                                   Placeholder="Service name" />
+                            <Entry x:Name="WebsiteUrlEntry"
+                                   Placeholder="Website URL" />
+                            <Entry x:Name="UsernameEntry"
+                                   Placeholder="Username or email" />
+                            <Entry x:Name="PasswordEntry"
+                                   Placeholder="Password"
+                                   IsPassword="True" />
+                            <HorizontalStackLayout Spacing="16">
+                                <CheckBox x:Name="RevealPasswordCheckBox"
+                                          CheckedChanged="OnRevealPasswordChanged" />
+                                <Label Text="Reveal password"
+                                       VerticalOptions="Center"
+                                       TextColor="#20231F" />
+                                <CheckBox x:Name="FavoriteCheckBox" />
+                                <Label Text="Favorite"
+                                       VerticalOptions="Center"
+                                       TextColor="#20231F" />
+                            </HorizontalStackLayout>
+                            <Editor x:Name="NotesEditor"
+                                    Placeholder="Notes"
+                                    HeightRequest="96"
+                                    AutoSize="TextChanges" />
+                            <Entry x:Name="TagsEntry"
+                                   Placeholder="Tags, comma separated" />
+
+                            <Grid ColumnDefinitions="*,*"
+                                  ColumnSpacing="12"
+                                  Margin="0,8,0,0">
+                                <Button x:Name="SaveEntryButton"
+                                        Text="Add entry"
+                                        Clicked="OnSaveEntryClicked" />
+                                <Button x:Name="DeleteEntryButton"
+                                        Grid.Column="1"
+                                        Text="Delete"
+                                        Style="{StaticResource DangerButton}"
+                                        Clicked="OnDeleteEntryClicked"
+                                        IsEnabled="False" />
+                            </Grid>
+                        </VerticalStackLayout>
+                    </ScrollView>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</ContentPage>
