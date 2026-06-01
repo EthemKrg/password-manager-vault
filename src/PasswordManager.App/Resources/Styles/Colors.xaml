@@ -4,17 +4,38 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
 
     <Color x:Key="Primary">#1F7A5C</Color>
+    <Color x:Key="PrimaryHover">#1A6B50</Color>
+    <Color x:Key="PrimaryPressed">#14543F</Color>
+    <Color x:Key="PrimaryDisabled">#A7B5AB</Color>
     <Color x:Key="PrimaryDark">#7CB79F</Color>
     <Color x:Key="PrimaryDarkText">#242424</Color>
     <Color x:Key="Secondary">#E7EAE2</Color>
+    <Color x:Key="SecondaryHover">#DDE3D7</Color>
+    <Color x:Key="SecondaryPressed">#CED7C8</Color>
+    <Color x:Key="SecondaryDisabled">#EEF0EA</Color>
     <Color x:Key="SecondaryDarkText">#DDE5D8</Color>
     <Color x:Key="Tertiary">#A94438</Color>
+    <Color x:Key="TertiaryHover">#963B31</Color>
+    <Color x:Key="TertiaryPressed">#7E2F27</Color>
+    <Color x:Key="TertiaryDisabled">#D8B9B5</Color>
     <Color x:Key="White">#FFFFFF</Color>
     <Color x:Key="Black">#000000</Color>
     <Color x:Key="Ink">#20231F</Color>
     <Color x:Key="Muted">#596157</Color>
+    <Color x:Key="MutedDisabled">#90988D</Color>
     <Color x:Key="Surface">#F6F7F4</Color>
+    <Color x:Key="SurfaceRaised">#FFFFFF</Color>
+    <Color x:Key="SurfaceSubtle">#F9FAF7</Color>
+    <Color x:Key="SurfaceHover">#F1F5EE</Color>
+    <Color x:Key="SurfaceSelected">#E6F1EA</Color>
+    <Color x:Key="InputFocusSurface">#FBFDF9</Color>
     <Color x:Key="Line">#D5D9D0</Color>
+    <Color x:Key="LineStrong">#AEB7A8</Color>
+    <Color x:Key="FocusRing">#2C8D6B</Color>
+    <Color x:Key="WarningSurface">#F4E8D7</Color>
+    <Color x:Key="WarningLine">#D6B47B</Color>
+    <Color x:Key="WarningText">#7B4A16</Color>
+    <Color x:Key="Transparent">#00FFFFFF</Color>
     <Color x:Key="Magenta">#A94438</Color>
     <Color x:Key="MidnightBlue">#20231F</Color>
     <Color x:Key="OffBlack">#1F1F1F</Color>
@@ -30,6 +51,10 @@
     <SolidColorBrush x:Key="PrimaryBrush" Color="{StaticResource Primary}" />
     <SolidColorBrush x:Key="SecondaryBrush" Color="{StaticResource Secondary}" />
     <SolidColorBrush x:Key="TertiaryBrush" Color="{StaticResource Tertiary}" />
+    <SolidColorBrush x:Key="LineBrush" Color="{StaticResource Line}" />
+    <SolidColorBrush x:Key="LineStrongBrush" Color="{StaticResource LineStrong}" />
+    <SolidColorBrush x:Key="FocusRingBrush" Color="{StaticResource FocusRing}" />
+    <SolidColorBrush x:Key="WarningLineBrush" Color="{StaticResource WarningLine}" />
     <SolidColorBrush x:Key="WhiteBrush" Color="{StaticResource White}" />
     <SolidColorBrush x:Key="BlackBrush" Color="{StaticResource Black}" />
     <SolidColorBrush x:Key="Gray100Brush" Color="{StaticResource Gray100}" />

@@ -4,6 +4,46 @@
              x:Class="PasswordManager.App.MainPage"
              BackgroundColor="#F6F7F4">
     <ContentPage.Resources>
+        <Style TargetType="Button">
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="FontAttributes" Value="Bold" />
+            <Setter Property="BorderWidth" Value="1" />
+            <Setter Property="BorderColor" Value="#1F7A5C" />
+            <Setter Property="BackgroundColor" Value="#1F7A5C" />
+            <Setter Property="TextColor" Value="#FFFFFF" />
+        </Style>
+
+        <Style x:Key="SecondaryButton" TargetType="Button">
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="BorderWidth" Value="1" />
+            <Setter Property="BorderColor" Value="#D5D9D0" />
+            <Setter Property="BackgroundColor" Value="#E7EAE2" />
+            <Setter Property="TextColor" Value="#20231F" />
+        </Style>
+
+        <Style x:Key="DangerButton" TargetType="Button">
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="BorderWidth" Value="1" />
+            <Setter Property="BorderColor" Value="#A94438" />
+            <Setter Property="BackgroundColor" Value="#A94438" />
+            <Setter Property="TextColor" Value="#FFFFFF" />
+        </Style>
+
+        <Style TargetType="Entry">
+            <Setter Property="BackgroundColor" Value="#FFFFFF" />
+            <Setter Property="TextColor" Value="#20231F" />
+            <Setter Property="PlaceholderColor" Value="#767D72" />
+        </Style>
+
+        <Style TargetType="Editor">
+            <Setter Property="BackgroundColor" Value="#FFFFFF" />
+            <Setter Property="TextColor" Value="#20231F" />
+            <Setter Property="PlaceholderColor" Value="#767D72" />
+        </Style>
+
         <Style x:Key="Panel" TargetType="Border">
             <Setter Property="Stroke" Value="#D5D9D0" />
             <Setter Property="StrokeThickness" Value="1" />
@@ -15,35 +55,7 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style TargetType="Button">
-            <Setter Property="CornerRadius" Value="6" />
-            <Setter Property="Padding" Value="14,10" />
-            <Setter Property="FontAttributes" Value="Bold" />
-            <Setter Property="BackgroundColor" Value="#1F7A5C" />
-            <Setter Property="TextColor" Value="#FFFFFF" />
-        </Style>
-        <Style x:Key="SecondaryButton" TargetType="Button">
-            <Setter Property="CornerRadius" Value="6" />
-            <Setter Property="Padding" Value="14,10" />
-            <Setter Property="BackgroundColor" Value="#E7EAE2" />
-            <Setter Property="TextColor" Value="#20231F" />
-        </Style>
-        <Style x:Key="DangerButton" TargetType="Button">
-            <Setter Property="CornerRadius" Value="6" />
-            <Setter Property="Padding" Value="14,10" />
-            <Setter Property="BackgroundColor" Value="#A94438" />
-            <Setter Property="TextColor" Value="#FFFFFF" />
-        </Style>
-        <Style TargetType="Entry">
-            <Setter Property="BackgroundColor" Value="#FFFFFF" />
-            <Setter Property="TextColor" Value="#20231F" />
-            <Setter Property="PlaceholderColor" Value="#767D72" />
-        </Style>
-        <Style TargetType="Editor">
-            <Setter Property="BackgroundColor" Value="#FFFFFF" />
-            <Setter Property="TextColor" Value="#20231F" />
-            <Setter Property="PlaceholderColor" Value="#767D72" />
-        </Style>
+
     </ContentPage.Resources>
 
     <Grid Padding="24"
@@ -122,14 +134,24 @@
                     <Entry x:Name="CreatePasswordEntry"
                            Placeholder="Master password for new vault"
                            IsPassword="True"
-                           ReturnType="Done" />
+                           ReturnType="Done"
+                           Focused="OnInputFocused"
+                           Unfocused="OnInputUnfocused" />
                     <Grid ColumnDefinitions="*,*"
                           ColumnSpacing="12">
                         <Button Text="Create vault"
+                                Pressed="OnButtonPressed"
+                                Released="OnButtonReleased"
+                                Focused="OnButtonFocused"
+                                Unfocused="OnButtonUnfocused"
                                 Clicked="OnCreateVaultClicked" />
                         <Button Grid.Column="1"
                                 Text="Open vault"
                                 Style="{StaticResource SecondaryButton}"
+                                Pressed="OnButtonPressed"
+                                Released="OnButtonReleased"
+                                Focused="OnButtonFocused"
+                                Unfocused="OnButtonUnfocused"
                                 Clicked="OnOpenVaultClicked" />
                     </Grid>
                 </VerticalStackLayout>
@@ -155,14 +177,24 @@
                            Placeholder="Master password"
                            IsPassword="True"
                            ReturnType="Done"
-                           Completed="OnUnlockPasswordCompleted" />
+                           Completed="OnUnlockPasswordCompleted"
+                           Focused="OnInputFocused"
+                           Unfocused="OnInputUnfocused" />
                     <Grid ColumnDefinitions="*,*"
                           ColumnSpacing="12">
                         <Button Text="Unlock"
+                                Pressed="OnButtonPressed"
+                                Released="OnButtonReleased"
+                                Focused="OnButtonFocused"
+                                Unfocused="OnButtonUnfocused"
                                 Clicked="OnUnlockVaultClicked" />
                         <Button Grid.Column="1"
                                 Text="Choose another"
                                 Style="{StaticResource SecondaryButton}"
+                                Pressed="OnButtonPressed"
+                                Released="OnButtonReleased"
+                                Focused="OnButtonFocused"
+                                Unfocused="OnButtonUnfocused"
                                 Clicked="OnChooseAnotherVaultClicked" />
                     </Grid>
                 </VerticalStackLayout>
@@ -180,12 +212,24 @@
                                TextColor="#20231F" />
                         <Button x:Name="SaveVaultButton"
                                 Text="Save"
+                                Pressed="OnButtonPressed"
+                                Released="OnButtonReleased"
+                                Focused="OnButtonFocused"
+                                Unfocused="OnButtonUnfocused"
                                 Clicked="OnSaveVaultClicked" />
                         <Button Text="Lock"
                                 Style="{StaticResource SecondaryButton}"
+                                Pressed="OnButtonPressed"
+                                Released="OnButtonReleased"
+                                Focused="OnButtonFocused"
+                                Unfocused="OnButtonUnfocused"
                                 Clicked="OnLockVaultClicked" />
                         <Button Text="Close"
                                 Style="{StaticResource SecondaryButton}"
+                                Pressed="OnButtonPressed"
+                                Released="OnButtonReleased"
+                                Focused="OnButtonFocused"
+                                Unfocused="OnButtonUnfocused"
                                 Clicked="OnCloseVaultClicked" />
                         <BoxView HeightRequest="1"
                                  Color="#D5D9D0"
@@ -211,10 +255,16 @@
                               ColumnSpacing="12">
                             <Entry x:Name="SearchEntry"
                                    Placeholder="Search accounts"
-                                   TextChanged="OnSearchTextChanged" />
+                                   TextChanged="OnSearchTextChanged"
+                                   Focused="OnInputFocused"
+                                   Unfocused="OnInputUnfocused" />
                             <Button Grid.Column="1"
                                     Text="New"
                                     Style="{StaticResource SecondaryButton}"
+                                    Pressed="OnButtonPressed"
+                                    Released="OnButtonReleased"
+                                    Focused="OnButtonFocused"
+                                    Unfocused="OnButtonUnfocused"
                                     Clicked="OnAddNewEntryClicked" />
                         </Grid>
 
@@ -232,6 +282,19 @@
                                             <Border.StrokeShape>
                                                 <RoundRectangle CornerRadius="8" />
                                             </Border.StrokeShape>
+                                            <VisualStateManager.VisualStateGroups>
+                                                <VisualStateGroupList>
+                                                    <VisualStateGroup x:Name="CommonStates">
+                                                        <VisualState x:Name="Normal" />
+                                                        <VisualState x:Name="Selected">
+                                                            <VisualState.Setters>
+                                                                <Setter Property="BackgroundColor" Value="#E6F1EA" />
+                                                                <Setter Property="Stroke" Value="#1F7A5C" />
+                                                            </VisualState.Setters>
+                                                        </VisualState>
+                                                    </VisualStateGroup>
+                                                </VisualStateGroupList>
+                                            </VisualStateManager.VisualStateGroups>
                                             <Grid RowDefinitions="Auto,Auto"
                                                   ColumnDefinitions="*,Auto"
                                                   RowSpacing="4">
@@ -282,26 +345,42 @@
                                    LineBreakMode="TailTruncation" />
 
                             <Entry x:Name="ServiceNameEntry"
-                                   Placeholder="Service name" />
+                                   Placeholder="Service name"
+                                   Focused="OnInputFocused"
+                                   Unfocused="OnInputUnfocused" />
                             <Entry x:Name="WebsiteUrlEntry"
-                                   Placeholder="Website URL" />
+                                   Placeholder="Website URL"
+                                   Focused="OnInputFocused"
+                                   Unfocused="OnInputUnfocused" />
                             <Grid ColumnDefinitions="*,Auto"
                                   ColumnSpacing="10">
                                 <Entry x:Name="UsernameEntry"
-                                       Placeholder="Username or email" />
+                                       Placeholder="Username or email"
+                                       Focused="OnInputFocused"
+                                       Unfocused="OnInputUnfocused" />
                                 <Button Grid.Column="1"
                                         Text="Copy username"
                                         Style="{StaticResource SecondaryButton}"
+                                        Pressed="OnButtonPressed"
+                                        Released="OnButtonReleased"
+                                        Focused="OnButtonFocused"
+                                        Unfocused="OnButtonUnfocused"
                                         Clicked="OnCopyUsernameClicked" />
                             </Grid>
                             <Grid ColumnDefinitions="*,Auto"
                                   ColumnSpacing="10">
                                 <Entry x:Name="PasswordEntry"
                                        Placeholder="Password"
-                                       IsPassword="True" />
+                                       IsPassword="True"
+                                       Focused="OnInputFocused"
+                                       Unfocused="OnInputUnfocused" />
                                 <Button Grid.Column="1"
                                         Text="Copy password"
                                         Style="{StaticResource SecondaryButton}"
+                                        Pressed="OnButtonPressed"
+                                        Released="OnButtonReleased"
+                                        Focused="OnButtonFocused"
+                                        Unfocused="OnButtonUnfocused"
                                         Clicked="OnCopyPasswordClicked" />
                             </Grid>
                             <HorizontalStackLayout Spacing="16">
@@ -322,20 +401,32 @@
                             <Editor x:Name="NotesEditor"
                                     Placeholder="Notes"
                                     HeightRequest="96"
-                                    AutoSize="TextChanges" />
+                                    AutoSize="TextChanges"
+                                    Focused="OnInputFocused"
+                                    Unfocused="OnInputUnfocused" />
                             <Entry x:Name="TagsEntry"
-                                   Placeholder="Tags, comma separated" />
+                                   Placeholder="Tags, comma separated"
+                                   Focused="OnInputFocused"
+                                   Unfocused="OnInputUnfocused" />
 
                             <Grid ColumnDefinitions="*,*"
                                   ColumnSpacing="12"
                                   Margin="0,8,0,0">
                                 <Button x:Name="SaveEntryButton"
                                         Text="Add entry"
+                                        Pressed="OnButtonPressed"
+                                        Released="OnButtonReleased"
+                                        Focused="OnButtonFocused"
+                                        Unfocused="OnButtonUnfocused"
                                         Clicked="OnSaveEntryClicked" />
                                 <Button x:Name="DeleteEntryButton"
                                         Grid.Column="1"
                                         Text="Delete"
                                         Style="{StaticResource DangerButton}"
+                                        Pressed="OnButtonPressed"
+                                        Released="OnButtonReleased"
+                                        Focused="OnButtonFocused"
+                                        Unfocused="OnButtonUnfocused"
                                         Clicked="OnDeleteEntryClicked"
                                         IsEnabled="False" />
                             </Grid>

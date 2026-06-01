@@ -18,6 +18,7 @@ public partial class MainPage : ContentPage
     private string? _trackedClipboardText;
     private CancellationTokenSource? _clipboardCountdownCancellation;
     private CancellationTokenSource? _passwordRevealCancellation;
+    private readonly HashSet<Button> _hoveredButtons = [];
     private bool _isUpdatingRevealState;
     private bool _isBusy;
 
@@ -28,6 +29,7 @@ public partial class MainPage : ContentPage
         _filePicker = filePicker;
         _clipboardService = clipboardService;
         EntryCollection.ItemsSource = _entries;
+        AttachButtonHoverHandlers(this);
         UpdateUi();
     }
 
@@ -154,6 +156,48 @@ public partial class MainPage : ContentPage
     private void OnSearchTextChanged(object? sender, TextChangedEventArgs e)
     {
         RefreshEntries();
+    }
+
+    private void OnInputFocused(object? sender, FocusEventArgs e)
+    {
+        SetInputFocusState(sender, focused: true);
+    }
+
+    private void OnInputUnfocused(object? sender, FocusEventArgs e)
+    {
+        SetInputFocusState(sender, focused: false);
+    }
+
+    private void OnButtonPressed(object? sender, EventArgs e)
+    {
+        if (sender is Button button)
+        {
+            ApplyButtonState(button, pressed: true, focused: button.IsFocused, hovered: _hoveredButtons.Contains(button));
+        }
+    }
+
+    private void OnButtonReleased(object? sender, EventArgs e)
+    {
+        if (sender is Button button)
+        {
+            ApplyButtonState(button, pressed: false, focused: button.IsFocused, hovered: _hoveredButtons.Contains(button));
+        }
+    }
+
+    private void OnButtonFocused(object? sender, FocusEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            ApplyButtonState(button, pressed: false, focused: true, hovered: _hoveredButtons.Contains(button));
+        }
+    }
+
+    private void OnButtonUnfocused(object? sender, FocusEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            ApplyButtonState(button, pressed: false, focused: false, hovered: _hoveredButtons.Contains(button));
+        }
     }
 
     private void OnEntrySelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -689,6 +733,7 @@ public partial class MainPage : ContentPage
         FavoriteCheckBox.IsChecked = _selectedEntry.IsFavorite;
         SaveEntryButton.Text = "Update entry";
         DeleteEntryButton.IsEnabled = true;
+        ApplyButtonState(DeleteEntryButton, pressed: false, focused: DeleteEntryButton.IsFocused, hovered: _hoveredButtons.Contains(DeleteEntryButton));
     }
 
     private void ClearEntryForm()
@@ -705,6 +750,7 @@ public partial class MainPage : ContentPage
         TagsEntry.Text = string.Empty;
         SaveEntryButton.Text = "Add entry";
         DeleteEntryButton.IsEnabled = false;
+        ApplyButtonState(DeleteEntryButton, pressed: false, focused: DeleteEntryButton.IsFocused, hovered: _hoveredButtons.Contains(DeleteEntryButton));
     }
 
     private void UpdateUi()
@@ -719,6 +765,8 @@ public partial class MainPage : ContentPage
         UnsavedBadge.IsVisible = _vaultSession.HasUnsavedChanges;
         SaveVaultButton.IsEnabled = _vaultSession.HasUnsavedChanges;
         EmptyListLabel.IsVisible = isUnlocked && _entries.Count == 0;
+        ApplyButtonState(SaveVaultButton, pressed: false, focused: SaveVaultButton.IsFocused, hovered: _hoveredButtons.Contains(SaveVaultButton));
+        ApplyButtonState(DeleteEntryButton, pressed: false, focused: DeleteEntryButton.IsFocused, hovered: _hoveredButtons.Contains(DeleteEntryButton));
 
         StatusBadge.Text = _vaultSession.State switch
         {
@@ -752,6 +800,113 @@ public partial class MainPage : ContentPage
     private void SetFeedback(string message)
     {
         FeedbackLabel.Text = message;
+    }
+
+    private void SetInputFocusState(object? sender, bool focused)
+    {
+        if (sender is not VisualElement input)
+        {
+            return;
+        }
+
+        input.BackgroundColor = focused
+            ? GetResourceColor("InputFocusSurface", Colors.White)
+            : GetResourceColor("SurfaceRaised", Colors.White);
+    }
+
+    private static Color GetResourceColor(string key, Color fallback)
+    {
+        return Application.Current?.Resources.TryGetValue(key, out var value) == true && value is Color color
+            ? color
+            : fallback;
+    }
+
+    private void AttachButtonHoverHandlers(IVisualTreeElement element)
+    {
+        foreach (var child in element.GetVisualChildren())
+        {
+            if (child is Button button)
+            {
+                var pointer = new PointerGestureRecognizer();
+                pointer.PointerEntered += (_, _) =>
+                {
+                    _hoveredButtons.Add(button);
+                    ApplyButtonState(button, pressed: false, focused: button.IsFocused, hovered: true);
+                };
+                pointer.PointerExited += (_, _) =>
+                {
+                    _hoveredButtons.Remove(button);
+                    ApplyButtonState(button, pressed: false, focused: button.IsFocused, hovered: false);
+                };
+                button.GestureRecognizers.Add(pointer);
+            }
+
+            if (child is IVisualTreeElement visualChild)
+            {
+                AttachButtonHoverHandlers(visualChild);
+            }
+        }
+    }
+
+    private void ApplyButtonState(Button button, bool pressed, bool focused, bool hovered)
+    {
+        var tone = GetButtonTone(button);
+        var colors = GetButtonColors(tone);
+
+        button.BorderWidth = 1;
+        button.BackgroundColor = button.IsEnabled
+            ? pressed ? colors.PressedBackground : hovered ? colors.HoverBackground : colors.Background
+            : colors.DisabledBackground;
+        button.TextColor = button.IsEnabled ? colors.Text : colors.DisabledText;
+        button.BorderColor = focused && button.IsEnabled
+            ? GetResourceColor("FocusRing", Color.FromArgb("#2C8D6B"))
+            : colors.Border;
+    }
+
+    private ButtonTone GetButtonTone(Button button)
+    {
+        if (button.Style is not null && ReferenceEquals(button.Style, Resources["DangerButton"]))
+        {
+            return ButtonTone.Danger;
+        }
+
+        if (button.Style is not null && ReferenceEquals(button.Style, Resources["SecondaryButton"]))
+        {
+            return ButtonTone.Secondary;
+        }
+
+        return ButtonTone.Primary;
+    }
+
+    private ButtonColors GetButtonColors(ButtonTone tone)
+    {
+        return tone switch
+        {
+            ButtonTone.Secondary => new ButtonColors(
+                GetResourceColor("Secondary", Color.FromArgb("#E7EAE2")),
+                GetResourceColor("SecondaryHover", Color.FromArgb("#DDE3D7")),
+                GetResourceColor("SecondaryPressed", Color.FromArgb("#CED7C8")),
+                GetResourceColor("Line", Color.FromArgb("#D5D9D0")),
+                GetResourceColor("Ink", Color.FromArgb("#20231F")),
+                GetResourceColor("SecondaryDisabled", Color.FromArgb("#EEF0EA")),
+                GetResourceColor("MutedDisabled", Color.FromArgb("#90988D"))),
+            ButtonTone.Danger => new ButtonColors(
+                GetResourceColor("Tertiary", Color.FromArgb("#A94438")),
+                GetResourceColor("TertiaryHover", Color.FromArgb("#963B31")),
+                GetResourceColor("TertiaryPressed", Color.FromArgb("#7E2F27")),
+                GetResourceColor("Tertiary", Color.FromArgb("#A94438")),
+                GetResourceColor("White", Color.FromArgb("#FFFFFF")),
+                GetResourceColor("TertiaryDisabled", Color.FromArgb("#D8B9B5")),
+                GetResourceColor("White", Color.FromArgb("#FFFFFF"))),
+            _ => new ButtonColors(
+                GetResourceColor("Primary", Color.FromArgb("#1F7A5C")),
+                GetResourceColor("PrimaryHover", Color.FromArgb("#1A6B50")),
+                GetResourceColor("PrimaryPressed", Color.FromArgb("#14543F")),
+                GetResourceColor("Primary", Color.FromArgb("#1F7A5C")),
+                GetResourceColor("White", Color.FromArgb("#FFFFFF")),
+                GetResourceColor("PrimaryDisabled", Color.FromArgb("#A7B5AB")),
+                GetResourceColor("White", Color.FromArgb("#FFFFFF")))
+        };
     }
 
     private static IReadOnlyList<string> SplitTags(string? tags)
@@ -803,4 +958,20 @@ public partial class MainPage : ContentPage
         Discard,
         Cancel
     }
+
+    private enum ButtonTone
+    {
+        Primary,
+        Secondary,
+        Danger
+    }
+
+    private sealed record ButtonColors(
+        Color Background,
+        Color HoverBackground,
+        Color PressedBackground,
+        Color Border,
+        Color Text,
+        Color DisabledBackground,
+        Color DisabledText);
 }
