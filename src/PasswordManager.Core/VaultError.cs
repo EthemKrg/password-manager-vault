@@ -8,6 +8,7 @@ public enum VaultError
     InvalidEntry,
     FileNotFound,
     FileAlreadyExists,
+    StaleVaultSnapshot,
     UnsupportedVaultFormat,
     UnsupportedVaultFeatures,
     OpenFailed,

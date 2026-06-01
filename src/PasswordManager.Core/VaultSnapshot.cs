@@ -5,10 +5,17 @@ namespace PasswordManager.Core;
 public sealed record VaultSnapshot
 {
     private IReadOnlyList<AccountEntry> _entries = Array.Empty<AccountEntry>();
+    private string? _sourceFingerprint;
 
     public VaultSnapshot(IReadOnlyList<AccountEntry> entries)
+        : this(entries, sourceFingerprint: null)
+    {
+    }
+
+    public VaultSnapshot(IReadOnlyList<AccountEntry> entries, string? sourceFingerprint)
     {
         Entries = entries;
+        SourceFingerprint = sourceFingerprint;
     }
 
     public static VaultSnapshot Empty { get; } = new([]);
@@ -17,6 +24,12 @@ public sealed record VaultSnapshot
     {
         get => _entries;
         init => _entries = NormalizeEntries(value);
+    }
+
+    public string? SourceFingerprint
+    {
+        get => _sourceFingerprint;
+        init => _sourceFingerprint = NormalizeSourceFingerprint(value);
     }
 
     public VaultSnapshot Add(AccountEntry entry)
@@ -28,7 +41,7 @@ public sealed record VaultSnapshot
             throw new InvalidOperationException("Entry already exists.");
         }
 
-        return new VaultSnapshot(Entries.Append(entry).ToArray());
+        return new VaultSnapshot(Entries.Append(entry).ToArray(), SourceFingerprint);
     }
 
     public VaultSnapshot Update(AccountEntry entry)
@@ -54,7 +67,7 @@ public sealed record VaultSnapshot
             throw new KeyNotFoundException("Entry does not exist.");
         }
 
-        return new VaultSnapshot(entries);
+        return new VaultSnapshot(entries, SourceFingerprint);
     }
 
     public VaultSnapshot Delete(Guid entryId)
@@ -68,7 +81,7 @@ public sealed record VaultSnapshot
             throw new KeyNotFoundException("Entry does not exist.");
         }
 
-        return new VaultSnapshot(entries);
+        return new VaultSnapshot(entries, SourceFingerprint);
     }
 
     public IReadOnlyList<AccountEntry> Search(VaultSearchQuery query)
@@ -126,11 +139,23 @@ public sealed record VaultSnapshot
             throw new ArgumentException("Entries cannot contain null values.", nameof(Entries));
         }
 
+        if (entryArray.Any(entry => entry.Id == Guid.Empty))
+        {
+            throw new ArgumentException("Entries cannot contain empty ids.", nameof(Entries));
+        }
+
         if (entryArray.GroupBy(entry => entry.Id).Any(group => group.Count() > 1))
         {
             throw new ArgumentException("Entries cannot contain duplicate ids.", nameof(Entries));
         }
 
         return Array.AsReadOnly(entryArray);
+    }
+
+    private static string? NormalizeSourceFingerprint(string? sourceFingerprint)
+    {
+        return string.IsNullOrWhiteSpace(sourceFingerprint)
+            ? null
+            : sourceFingerprint.Trim();
     }
 }

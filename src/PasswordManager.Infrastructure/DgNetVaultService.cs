@@ -1,5 +1,6 @@
 using DgNet.Keepass;
 using PasswordManager.Core;
+using System.Security.Cryptography;
 
 namespace PasswordManager.Infrastructure;
 
@@ -8,6 +9,8 @@ public sealed class DgNetVaultService : IVaultService
     private const char TagSeparator = ';';
     private const string AppVaultName = "Password Manager Vault";
     private const string AppVaultMarker = "PasswordManagerVault:v1";
+    private const int DefaultHistoryMaxItems = 10;
+    private const long DefaultHistoryMaxSize = 6_291_456;
     private static readonly HashSet<string> StandardEntryStringKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "Title",
@@ -67,8 +70,18 @@ public sealed class DgNetVaultService : IVaultService
 
         try
         {
+            var fingerprintBeforeOpen = await ComputeVaultFingerprintAsync(vaultPath, cancellationToken);
+
             using var database = new Database(vaultPath, masterPassword);
             await database.OpenAsync(cancellationToken);
+
+            var fingerprintAfterOpen = await ComputeVaultFingerprintAsync(vaultPath, cancellationToken);
+            if (!string.Equals(fingerprintBeforeOpen, fingerprintAfterOpen, StringComparison.Ordinal))
+            {
+                return VaultOperationResult<VaultSnapshot>.Failure(
+                    VaultError.StaleVaultSnapshot,
+                    "Vault changed while it was being loaded.");
+            }
 
             var supportResult = ValidateAppManagedDatabase(database);
             if (supportResult is not null)
@@ -81,7 +94,7 @@ public sealed class DgNetVaultService : IVaultService
                 .Select(MapEntry)
                 .ToArray();
 
-            return VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot(entries));
+            return VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot(entries, fingerprintAfterOpen));
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -116,6 +129,7 @@ public sealed class DgNetVaultService : IVaultService
                 var existingVaultResult = await ValidateExistingVaultForRewriteAsync(
                     vaultPath,
                     masterPassword,
+                    snapshot,
                     cancellationToken);
 
                 if (!existingVaultResult.Succeeded)
@@ -246,14 +260,38 @@ public sealed class DgNetVaultService : IVaultService
     private static async Task<VaultOperationResult> ValidateExistingVaultForRewriteAsync(
         string vaultPath,
         string masterPassword,
+        VaultSnapshot snapshot,
         CancellationToken cancellationToken)
     {
         try
         {
+            var fingerprintBeforeOpen = await ComputeVaultFingerprintAsync(vaultPath, cancellationToken);
+
             using var existingDatabase = new Database(vaultPath, masterPassword);
             await existingDatabase.OpenAsync(cancellationToken);
 
-            return ValidateAppManagedDatabase(existingDatabase) ?? VaultOperationResult.Success();
+            var fingerprintAfterOpen = await ComputeVaultFingerprintAsync(vaultPath, cancellationToken);
+            if (!string.Equals(fingerprintBeforeOpen, fingerprintAfterOpen, StringComparison.Ordinal))
+            {
+                return VaultOperationResult.Failure(
+                    VaultError.StaleVaultSnapshot,
+                    "Vault changed while it was being validated.");
+            }
+
+            var supportResult = ValidateAppManagedDatabase(existingDatabase);
+            if (supportResult is not null)
+            {
+                return supportResult;
+            }
+
+            if (!string.Equals(snapshot.SourceFingerprint, fingerprintAfterOpen, StringComparison.Ordinal))
+            {
+                return VaultOperationResult.Failure(
+                    VaultError.StaleVaultSnapshot,
+                    "Snapshot is not based on the current vault file.");
+            }
+
+            return VaultOperationResult.Success();
         }
         catch (Exception ex)
         {
@@ -284,12 +322,13 @@ public sealed class DgNetVaultService : IVaultService
 
     private static bool IsAppManagedDatabase(Database database)
     {
-        return string.Equals(database.Metadata.Description, AppVaultMarker, StringComparison.Ordinal);
+        return string.Equals(database.Metadata.Name, AppVaultName, StringComparison.Ordinal)
+            && string.Equals(database.Metadata.Description, AppVaultMarker, StringComparison.Ordinal);
     }
 
     private static bool HasUnsupportedFeatures(Database database)
     {
-        if (database.RootGroup.Groups.Count > 0)
+        if (HasUnsupportedMetadata(database.Metadata) || HasUnsupportedRootGroupFeatures(database.RootGroup))
         {
             return true;
         }
@@ -299,11 +338,87 @@ public sealed class DgNetVaultService : IVaultService
             .Any(HasUnsupportedEntryFeatures);
     }
 
+    private static bool HasUnsupportedMetadata(Metadata metadata)
+    {
+        return !string.IsNullOrEmpty(metadata.DefaultUserName)
+            || metadata.CustomIcons.Count > 0
+            || metadata.RecycleBinEnabled is not true
+            || metadata.RecycleBinUuid != Guid.Empty
+            || metadata.HistoryMaxItems != DefaultHistoryMaxItems
+            || metadata.HistoryMaxSize != DefaultHistoryMaxSize
+            || metadata.ProtectPassword is not true;
+    }
+
+    private static bool HasUnsupportedRootGroupFeatures(Group rootGroup)
+    {
+        return rootGroup.Groups.Count > 0
+            || !string.Equals(rootGroup.Name, "Root", StringComparison.Ordinal)
+            || !string.IsNullOrEmpty(rootGroup.Notes)
+            || rootGroup.IconId != 0
+            || rootGroup.CustomIconUuid != Guid.Empty
+            || rootGroup.EnableAutoType is not null
+            || rootGroup.EnableSearching is not null
+            || HasUnsupportedTimes(rootGroup.Times);
+    }
+
     private static bool HasUnsupportedEntryFeatures(Entry entry)
     {
-        return entry.Binaries.Count > 0
+        return entry.IconId != 0
+            || entry.CustomIconUuid != Guid.Empty
+            || !string.IsNullOrEmpty(entry.ForegroundColor)
+            || !string.IsNullOrEmpty(entry.BackgroundColor)
+            || !string.IsNullOrEmpty(entry.OverrideUrl)
+            || HasUnsupportedTimes(entry.Times)
+            || HasUnsupportedAutoType(entry.AutoType)
+            || HasUnsupportedEntryStrings(entry)
             || entry.History.Count > 0
-            || entry.Strings.Keys.Any(key => !StandardEntryStringKeys.Contains(key));
+            || entry.Binaries.Count > 0;
+    }
+
+    private static bool HasUnsupportedTimes(Times times)
+    {
+        return times.Expires
+            || times.UsageCount != 0
+            || times.LastAccessTime != default
+            || times.ExpiryTime != default
+            || times.LocationChanged != default;
+    }
+
+    private static bool HasUnsupportedAutoType(AutoType autoType)
+    {
+        return autoType.Enabled is not true
+            || autoType.DataTransferObfuscation != 0
+            || !string.IsNullOrEmpty(autoType.DefaultSequence)
+            || autoType.Associations.Count > 0;
+    }
+
+    private static bool HasUnsupportedEntryStrings(Entry entry)
+    {
+        if (entry.Strings.Keys.Any(key => !StandardEntryStringKeys.Contains(key)))
+        {
+            return true;
+        }
+
+        return HasUnexpectedProtection(entry, "Title", protectedValue: false)
+            || HasUnexpectedProtection(entry, "UserName", protectedValue: false)
+            || HasUnexpectedProtection(entry, "Password", protectedValue: true)
+            || HasUnexpectedProtection(entry, "URL", protectedValue: false)
+            || HasUnexpectedProtection(entry, "Notes", protectedValue: false);
+    }
+
+    private static bool HasUnexpectedProtection(Entry entry, string key, bool protectedValue)
+    {
+        return entry.Strings.TryGetValue(key, out var value)
+            && value.Protected != protectedValue;
+    }
+
+    private static async Task<string> ComputeVaultFingerprintAsync(
+        string vaultPath,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = File.Open(vaultPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken);
+        return Convert.ToHexString(hash);
     }
 
     private static async Task SaveDatabaseReplacingTargetAsync(

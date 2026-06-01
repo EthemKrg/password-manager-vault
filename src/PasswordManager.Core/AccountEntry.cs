@@ -5,6 +5,7 @@ namespace PasswordManager.Core;
 public sealed record AccountEntry
 {
     private IReadOnlyList<string> _tags = Array.Empty<string>();
+    private Guid _id;
     private string _serviceName = string.Empty;
     private string _websiteUrl = string.Empty;
     private string _usernameOrEmail = string.Empty;
@@ -20,7 +21,7 @@ public sealed record AccountEntry
         string notes,
         IReadOnlyList<string> tags)
     {
-        Id = id == Guid.Empty ? throw new ArgumentException("Entry id is required.", nameof(id)) : id;
+        Id = id;
         ServiceName = serviceName;
         WebsiteUrl = websiteUrl;
         UsernameOrEmail = usernameOrEmail;
@@ -29,7 +30,13 @@ public sealed record AccountEntry
         Tags = tags;
     }
 
-    public Guid Id { get; init; }
+    public Guid Id
+    {
+        get => _id;
+        init => _id = value == Guid.Empty
+            ? throw new ArgumentException("Entry id is required.", nameof(Id))
+            : value;
+    }
 
     public string ServiceName
     {
