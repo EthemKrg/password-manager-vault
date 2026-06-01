@@ -30,7 +30,9 @@ public sealed class VaultSessionTests
         var updateResult = session.UpdateEntry(CreateEntry("GitHub"));
         var deleteResult = session.DeleteEntry(Guid.NewGuid());
         var searchResult = session.Search(VaultSearchQuery.Empty);
+        var listBackupsResult = await session.ListBackupArtifactsAsync();
         var saveResult = await session.SaveAsync();
+        var restoreResult = await session.RestoreBackupAsync("backup.kdbx", MasterPassword);
 
         Assert.False(addResult.Succeeded);
         Assert.Equal(VaultError.NoVaultLoaded, addResult.Error);
@@ -40,8 +42,12 @@ public sealed class VaultSessionTests
         Assert.Equal(VaultError.NoVaultLoaded, deleteResult.Error);
         Assert.False(searchResult.Succeeded);
         Assert.Equal(VaultError.NoVaultLoaded, searchResult.Error);
+        Assert.False(listBackupsResult.Succeeded);
+        Assert.Equal(VaultError.NoVaultLoaded, listBackupsResult.Error);
         Assert.False(saveResult.Succeeded);
         Assert.Equal(VaultError.NoVaultLoaded, saveResult.Error);
+        Assert.False(restoreResult.Succeeded);
+        Assert.Equal(VaultError.NoVaultLoaded, restoreResult.Error);
     }
 
     [Fact]
@@ -55,7 +61,9 @@ public sealed class VaultSessionTests
         var lockResult = session.Lock();
         var addResult = session.AddEntry(CreateDraft("GitHub"));
         var searchResult = session.Search(VaultSearchQuery.Empty);
+        var listBackupsResult = await session.ListBackupArtifactsAsync();
         var saveResult = await session.SaveAsync();
+        var restoreResult = await session.RestoreBackupAsync("backup.kdbx", MasterPassword);
 
         Assert.True(unlockResult.Succeeded);
         Assert.True(lockResult.Succeeded);
@@ -64,8 +72,12 @@ public sealed class VaultSessionTests
         Assert.Equal(VaultError.VaultLocked, addResult.Error);
         Assert.False(searchResult.Succeeded);
         Assert.Equal(VaultError.VaultLocked, searchResult.Error);
+        Assert.False(listBackupsResult.Succeeded);
+        Assert.Equal(VaultError.VaultLocked, listBackupsResult.Error);
         Assert.False(saveResult.Succeeded);
         Assert.Equal(VaultError.VaultLocked, saveResult.Error);
+        Assert.False(restoreResult.Succeeded);
+        Assert.Equal(VaultError.VaultLocked, restoreResult.Error);
     }
 
     [Fact]
@@ -336,6 +348,90 @@ public sealed class VaultSessionTests
     }
 
     [Fact]
+    public async Task ListBackupArtifactsAsync_UsesBackupServiceWhenUnlocked()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        var artifact = new VaultBackupArtifact(
+            "session-test-backup.kdbx",
+            VaultBackupArtifactKind.Backup,
+            SessionStart,
+            "fp-before");
+        backupService.ListResults.Enqueue(
+            VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>.Success([artifact]));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot([], "fp-before")));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+
+        var result = await session.ListBackupArtifactsAsync();
+
+        Assert.True(result.Succeeded);
+        Assert.Same(artifact, Assert.Single(result.Value!));
+        Assert.Equal([VaultPath], backupService.ListCalls);
+    }
+
+    [Fact]
+    public async Task RestoreBackupAsync_WhenDirtyReturnsUnsavedChangesAndDoesNotCallBackupService()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot([], "fp-before")));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+        session.AddEntry(CreateDraft("GitHub"));
+
+        var result = await session.RestoreBackupAsync("backup.kdbx", MasterPassword);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(VaultError.UnsavedChanges, result.Error);
+        Assert.True(session.HasUnsavedChanges);
+        Assert.Empty(backupService.RestoreCalls);
+    }
+
+    [Fact]
+    public async Task RestoreBackupAsync_SuccessReloadsSnapshotAndClearsDirtyState()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot([CreateEntry("Current")], "fp-before")));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot([CreateEntry("Restored")], "fp-restored")));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+
+        var result = await session.RestoreBackupAsync("backup.kdbx", MasterPassword);
+
+        Assert.True(result.Succeeded);
+        Assert.False(session.HasUnsavedChanges);
+        Assert.Equal("fp-restored", session.CurrentSnapshot!.SourceFingerprint);
+        Assert.Equal("Restored", Assert.Single(session.CurrentSnapshot.Entries).ServiceName);
+        var restoreCall = Assert.Single(backupService.RestoreCalls);
+        Assert.Equal(VaultPath, restoreCall.Path);
+        Assert.Equal("backup.kdbx", restoreCall.BackupPath);
+        Assert.Equal(MasterPassword, restoreCall.Password);
+        Assert.Equal(2, service.LoadCalls.Count);
+    }
+
+    [Fact]
+    public async Task RestoreBackupAsync_FailurePreservesCurrentSession()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        backupService.RestoreResults.Enqueue(VaultOperationResult.Failure(VaultError.OpenFailed));
+        var currentSnapshot = new VaultSnapshot([CreateEntry("Current")], "fp-before");
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(currentSnapshot));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+
+        var result = await session.RestoreBackupAsync("backup.kdbx", WrongPassword);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(VaultError.OpenFailed, result.Error);
+        Assert.Same(currentSnapshot, session.CurrentSnapshot);
+        Assert.False(session.HasUnsavedChanges);
+        Assert.Single(service.LoadCalls);
+    }
+
+    [Fact]
     public async Task LockAndClose_ProtectUnsavedChangesUnlessDiscarded()
     {
         var session = await CreateUnlockedSession(new VaultSnapshot([], "fp-1"));
@@ -518,13 +614,32 @@ public sealed class VaultSessionTests
 
     private sealed class FakeVaultBackupService : IVaultBackupService
     {
+        public Queue<VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>> ListResults { get; } = new();
+
         public Queue<VaultOperationResult<VaultBackupArtifact>> BackupResults { get; } = new();
 
         public Queue<VaultOperationResult<VaultBackupArtifact>> ConflictCopyResults { get; } = new();
 
+        public Queue<VaultOperationResult> RestoreResults { get; } = new();
+
+        public List<string> ListCalls { get; } = [];
+
         public List<string> BackupCalls { get; } = [];
 
         public List<(string Path, string Password, VaultSnapshot Snapshot)> ConflictCopyCalls { get; } = [];
+
+        public List<(string Path, string BackupPath, string Password)> RestoreCalls { get; } = [];
+
+        public Task<VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>> ListArtifactsAsync(
+            string vaultPath,
+            VaultBackupOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            ListCalls.Add(vaultPath);
+            return Task.FromResult(ListResults.Count > 0
+                ? ListResults.Dequeue()
+                : VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>.Success([]));
+        }
 
         public Task<VaultOperationResult<VaultBackupArtifact>> CreateBackupAsync(
             string vaultPath,
@@ -558,6 +673,19 @@ public sealed class VaultSessionTests
                         VaultBackupArtifactKind.ConflictCopy,
                         SessionStart,
                         snapshot.SourceFingerprint)));
+        }
+
+        public Task<VaultOperationResult> RestoreBackupAsync(
+            string vaultPath,
+            string backupPath,
+            string masterPassword,
+            VaultBackupOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            RestoreCalls.Add((vaultPath, backupPath, masterPassword));
+            return Task.FromResult(RestoreResults.Count > 0
+                ? RestoreResults.Dequeue()
+                : VaultOperationResult.Success());
         }
     }
 }

@@ -208,6 +208,28 @@ public sealed class VaultSession : IVaultSession
         return VaultOperationResult<IReadOnlyList<AccountEntry>>.Success(CurrentSnapshot!.Search(query));
     }
 
+    public async Task<VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>> ListBackupArtifactsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var stateCheck = EnsureUnlocked();
+        if (stateCheck is not null)
+        {
+            return VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>.Failure(
+                stateCheck.Error,
+                stateCheck.Message);
+        }
+
+        if (_vaultBackupService is null)
+        {
+            return VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>.Failure(VaultError.BackupFailed);
+        }
+
+        return await _vaultBackupService.ListArtifactsAsync(
+            VaultPath!,
+            _vaultBackupOptions,
+            cancellationToken);
+    }
+
     public async Task<VaultOperationResult> SaveAsync(CancellationToken cancellationToken = default)
     {
         var stateCheck = EnsureUnlocked();
@@ -260,6 +282,48 @@ public sealed class VaultSession : IVaultSession
 
         CurrentSnapshot = reloadResult.Value!;
         HasUnsavedChanges = false;
+        return VaultOperationResult.Success();
+    }
+
+    public async Task<VaultOperationResult> RestoreBackupAsync(
+        string backupPath,
+        string masterPassword,
+        CancellationToken cancellationToken = default)
+    {
+        var stateCheck = EnsureUnlocked();
+        if (stateCheck is not null)
+        {
+            return stateCheck;
+        }
+
+        if (HasUnsavedChanges)
+        {
+            return VaultOperationResult.Failure(VaultError.UnsavedChanges);
+        }
+
+        if (_vaultBackupService is null)
+        {
+            return VaultOperationResult.Failure(VaultError.BackupFailed);
+        }
+
+        var restoreResult = await _vaultBackupService.RestoreBackupAsync(
+            VaultPath!,
+            backupPath,
+            masterPassword,
+            _vaultBackupOptions,
+            cancellationToken);
+        if (!restoreResult.Succeeded)
+        {
+            return restoreResult;
+        }
+
+        var reloadResult = await _vaultService.LoadAsync(VaultPath!, masterPassword, cancellationToken);
+        if (!reloadResult.Succeeded)
+        {
+            return VaultOperationResult.Failure(reloadResult.Error, reloadResult.Message);
+        }
+
+        SetUnlocked(VaultPath!, masterPassword, reloadResult.Value!);
         return VaultOperationResult.Success();
     }
 

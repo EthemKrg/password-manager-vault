@@ -201,50 +201,141 @@
             </Border>
 
             <Grid x:Name="DashboardPanel"
-                  ColumnDefinitions="220,*,380"
+                  ColumnDefinitions="280,*,380"
                   ColumnSpacing="18"
                   IsVisible="False">
                 <Border Style="{StaticResource Panel}">
-                    <VerticalStackLayout Spacing="12">
-                        <Label Text="Vault"
-                               FontSize="18"
-                               FontAttributes="Bold"
-                               TextColor="#20231F" />
-                        <Button x:Name="SaveVaultButton"
-                                Text="Save"
-                                Pressed="OnButtonPressed"
-                                Released="OnButtonReleased"
-                                Focused="OnButtonFocused"
-                                Unfocused="OnButtonUnfocused"
-                                Clicked="OnSaveVaultClicked" />
-                        <Button Text="Lock"
-                                Style="{StaticResource SecondaryButton}"
-                                Pressed="OnButtonPressed"
-                                Released="OnButtonReleased"
-                                Focused="OnButtonFocused"
-                                Unfocused="OnButtonUnfocused"
-                                Clicked="OnLockVaultClicked" />
-                        <Button Text="Close"
-                                Style="{StaticResource SecondaryButton}"
-                                Pressed="OnButtonPressed"
-                                Released="OnButtonReleased"
-                                Focused="OnButtonFocused"
-                                Unfocused="OnButtonUnfocused"
-                                Clicked="OnCloseVaultClicked" />
-                        <BoxView HeightRequest="1"
-                                 Color="#D5D9D0"
-                                 Margin="0,8" />
-                        <Label Text="Filters"
-                               FontSize="14"
-                               FontAttributes="Bold"
-                               TextColor="#596157" />
-                        <Label Text="All items"
-                               TextColor="#20231F" />
-                        <Label Text="Favorites"
-                               TextColor="#596157" />
-                        <Label Text="Tags"
-                               TextColor="#596157" />
-                    </VerticalStackLayout>
+                    <ScrollView>
+                        <VerticalStackLayout Spacing="12">
+                            <Label Text="Vault"
+                                   FontSize="18"
+                                   FontAttributes="Bold"
+                                   TextColor="#20231F" />
+                            <Button x:Name="SaveVaultButton"
+                                    Text="Save"
+                                    Pressed="OnButtonPressed"
+                                    Released="OnButtonReleased"
+                                    Focused="OnButtonFocused"
+                                    Unfocused="OnButtonUnfocused"
+                                    Clicked="OnSaveVaultClicked" />
+                            <Button Text="Lock"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Pressed="OnButtonPressed"
+                                    Released="OnButtonReleased"
+                                    Focused="OnButtonFocused"
+                                    Unfocused="OnButtonUnfocused"
+                                    Clicked="OnLockVaultClicked" />
+                            <Button Text="Close"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Pressed="OnButtonPressed"
+                                    Released="OnButtonReleased"
+                                    Focused="OnButtonFocused"
+                                    Unfocused="OnButtonUnfocused"
+                                    Clicked="OnCloseVaultClicked" />
+                            <BoxView HeightRequest="1"
+                                     Color="#D5D9D0"
+                                     Margin="0,8" />
+                            <Label Text="Filters"
+                                   FontSize="14"
+                                   FontAttributes="Bold"
+                                   TextColor="#596157" />
+                            <Label Text="All items"
+                                   TextColor="#20231F" />
+                            <Label Text="Favorites"
+                                   TextColor="#596157" />
+                            <Label Text="Tags"
+                                   TextColor="#596157" />
+                            <BoxView HeightRequest="1"
+                                     Color="#D5D9D0"
+                                     Margin="0,8" />
+                            <Grid ColumnDefinitions="*,Auto"
+                                  ColumnSpacing="8"
+                                  VerticalOptions="Center">
+                                <Label Text="Backups"
+                                       FontSize="14"
+                                       FontAttributes="Bold"
+                                       TextColor="#596157"
+                                       VerticalOptions="Center" />
+                                <Button x:Name="RefreshBackupsButton"
+                                        Grid.Column="1"
+                                        Text="Refresh"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Pressed="OnButtonPressed"
+                                        Released="OnButtonReleased"
+                                        Focused="OnButtonFocused"
+                                        Unfocused="OnButtonUnfocused"
+                                        Clicked="OnRefreshBackupsClicked" />
+                            </Grid>
+                            <Grid HeightRequest="180">
+                                <CollectionView x:Name="BackupCollection"
+                                                SelectionMode="Single"
+                                                SelectionChanged="OnBackupSelectionChanged">
+                                    <CollectionView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,0,0,8"
+                                                    Padding="10"
+                                                    BackgroundColor="#F9FAF7"
+                                                    Stroke="#D5D9D0"
+                                                    StrokeThickness="1">
+                                                <Border.StrokeShape>
+                                                    <RoundRectangle CornerRadius="8" />
+                                                </Border.StrokeShape>
+                                                <VisualStateManager.VisualStateGroups>
+                                                    <VisualStateGroupList>
+                                                        <VisualStateGroup x:Name="CommonStates">
+                                                            <VisualState x:Name="Normal" />
+                                                            <VisualState x:Name="Selected">
+                                                                <VisualState.Setters>
+                                                                    <Setter Property="BackgroundColor" Value="#E6F1EA" />
+                                                                    <Setter Property="Stroke" Value="#1F7A5C" />
+                                                                </VisualState.Setters>
+                                                            </VisualState>
+                                                        </VisualStateGroup>
+                                                    </VisualStateGroupList>
+                                                </VisualStateManager.VisualStateGroups>
+                                                <Grid RowDefinitions="Auto,Auto,Auto"
+                                                      RowSpacing="3">
+                                                    <Label Text="{Binding KindLabel}"
+                                                           FontSize="12"
+                                                           FontAttributes="Bold"
+                                                           TextColor="#1F7A5C" />
+                                                    <Label Grid.Row="1"
+                                                           Text="{Binding CreatedAtLabel}"
+                                                           FontSize="12"
+                                                           TextColor="#596157" />
+                                                    <Label Grid.Row="2"
+                                                           Text="{Binding FileName}"
+                                                           FontSize="11"
+                                                           TextColor="#596157"
+                                                           LineBreakMode="TailTruncation" />
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </CollectionView.ItemTemplate>
+                                </CollectionView>
+                                <Label x:Name="EmptyBackupsLabel"
+                                       Text="No backups yet"
+                                       HorizontalOptions="Center"
+                                       VerticalOptions="Center"
+                                       TextColor="#596157"
+                                       IsVisible="False" />
+                            </Grid>
+                            <Entry x:Name="RestorePasswordEntry"
+                                   Placeholder="Master password to restore"
+                                   IsPassword="True"
+                                   Focused="OnInputFocused"
+                                   Unfocused="OnInputUnfocused" />
+                            <Button x:Name="RestoreBackupButton"
+                                    Text="Restore selected"
+                                    Style="{StaticResource DangerButton}"
+                                    Pressed="OnButtonPressed"
+                                    Released="OnButtonReleased"
+                                    Focused="OnButtonFocused"
+                                    Unfocused="OnButtonUnfocused"
+                                    Clicked="OnRestoreBackupClicked"
+                                    IsEnabled="False" />
+                        </VerticalStackLayout>
+                    </ScrollView>
                 </Border>
 
                 <Border Grid.Column="1"

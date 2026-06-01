@@ -18,6 +18,7 @@ public enum VaultError
     UnsupportedVaultFeatures,
     BackupFailed,
     ConflictCopyFailed,
+    RestoreFailed,
     OpenFailed,
     SaveFailed,
     Unknown
