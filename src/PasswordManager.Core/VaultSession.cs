@@ -4,12 +4,20 @@ public sealed class VaultSession : IVaultSession
 {
     private readonly IVaultService _vaultService;
     private readonly TimeProvider _timeProvider;
+    private readonly IVaultBackupService? _vaultBackupService;
+    private readonly VaultBackupOptions _vaultBackupOptions;
     private string? _masterPassword;
 
-    public VaultSession(IVaultService vaultService, TimeProvider? timeProvider = null)
+    public VaultSession(
+        IVaultService vaultService,
+        TimeProvider? timeProvider = null,
+        IVaultBackupService? vaultBackupService = null,
+        VaultBackupOptions? vaultBackupOptions = null)
     {
         _vaultService = vaultService ?? throw new ArgumentNullException(nameof(vaultService));
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _vaultBackupService = vaultBackupService;
+        _vaultBackupOptions = vaultBackupOptions ?? new VaultBackupOptions();
     }
 
     public VaultSessionState State { get; private set; } = VaultSessionState.NoVaultLoaded;
@@ -208,6 +216,18 @@ public sealed class VaultSession : IVaultSession
             return stateCheck;
         }
 
+        if (_vaultBackupService is not null)
+        {
+            var backupResult = await _vaultBackupService.CreateBackupAsync(
+                VaultPath!,
+                _vaultBackupOptions,
+                cancellationToken);
+            if (!backupResult.Succeeded)
+            {
+                return VaultOperationResult.Failure(backupResult.Error, backupResult.Message);
+            }
+        }
+
         var saveResult = await _vaultService.SaveAsync(
             VaultPath!,
             _masterPassword!,
@@ -215,6 +235,20 @@ public sealed class VaultSession : IVaultSession
             cancellationToken);
         if (!saveResult.Succeeded)
         {
+            if (saveResult.Error == VaultError.StaleVaultSnapshot && _vaultBackupService is not null)
+            {
+                var conflictCopyResult = await _vaultBackupService.CreateConflictCopyAsync(
+                    VaultPath!,
+                    _masterPassword!,
+                    CurrentSnapshot!,
+                    _vaultBackupOptions,
+                    cancellationToken);
+                if (!conflictCopyResult.Succeeded)
+                {
+                    return VaultOperationResult.Failure(conflictCopyResult.Error, conflictCopyResult.Message);
+                }
+            }
+
             return saveResult;
         }
 

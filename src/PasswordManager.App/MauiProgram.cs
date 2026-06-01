@@ -20,8 +20,11 @@ public static class MauiProgram
 
         builder.Services.AddSingleton<IVaultService, DgNetVaultService>();
         builder.Services.AddSingleton<IExternalVaultAnalyzer, DgNetExternalVaultAnalyzer>();
+        builder.Services.AddSingleton<IVaultBackupService, FileSystemVaultBackupService>();
         builder.Services.AddSingleton<IVaultSession>(services =>
-            new VaultSession(services.GetRequiredService<IVaultService>()));
+            new VaultSession(
+                services.GetRequiredService<IVaultService>(),
+                vaultBackupService: services.GetRequiredService<IVaultBackupService>()));
         builder.Services.AddSingleton<IVaultFilePicker, WindowsVaultFilePicker>();
         builder.Services.AddSingleton<IClipboardService, MauiClipboardService>();
         builder.Services.AddSingleton<MainPage>();

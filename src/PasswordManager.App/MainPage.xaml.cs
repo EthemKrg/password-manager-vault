@@ -946,6 +946,8 @@ public partial class MainPage : ContentPage
             VaultError.EntryAlreadyExists => "Entry already exists.",
             VaultError.UnsupportedVaultFormat => "This vault was not created by this app.",
             VaultError.UnsupportedVaultFeatures => "This vault contains unsupported KeePass features.",
+            VaultError.BackupFailed => "Vault backup could not be created. Save was stopped.",
+            VaultError.ConflictCopyFailed => "Vault changed on disk and the conflict copy could not be created.",
             VaultError.OpenFailed => "Vault could not be opened. Check the password.",
             VaultError.SaveFailed => "Vault could not be saved.",
             _ => message ?? "Operation failed."
