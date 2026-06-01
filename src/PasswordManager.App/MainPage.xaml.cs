@@ -401,8 +401,8 @@ public partial class MainPage : ContentPage
         {
             var confirmed = await DisplayAlertAsync(
                 "Delete entry",
-                $"Delete {_selectedEntry.ServiceName} from the current snapshot?",
-                "Delete",
+                $"Delete {_selectedEntry.ServiceName}? This removes it from the current vault snapshot. Save the vault to make the deletion permanent.",
+                "Delete entry",
                 "Cancel");
             if (!confirmed)
             {
@@ -526,7 +526,7 @@ public partial class MainPage : ContentPage
 
         try
         {
-            var pendingChoice = await ResolvePendingChangesAsync();
+            var pendingChoice = await ResolvePendingChangesAsync(close ? "close the vault" : "lock the vault");
             if (pendingChoice == PendingChangeChoice.Cancel)
             {
                 SetFeedback(close ? "Close cancelled." : "Lock cancelled.");
@@ -629,6 +629,13 @@ public partial class MainPage : ContentPage
 
         try
         {
+            var confirmed = await ConfirmDiscardUnsavedChangesAsync("lock the vault");
+            if (!confirmed)
+            {
+                ActivatePrivacyMask("Discard cancelled. Sensitive content remains masked until you save or discard.");
+                return;
+            }
+
             var result = _vaultSession.Lock(discardUnsavedChanges: true);
             if (!result.Succeeded)
             {
@@ -678,7 +685,7 @@ public partial class MainPage : ContentPage
         RefreshEntries();
     }
 
-    private async Task<PendingChangeChoice> ResolvePendingChangesAsync()
+    private async Task<PendingChangeChoice> ResolvePendingChangesAsync(string pendingAction)
     {
         if (!_vaultSession.HasUnsavedChanges)
         {
@@ -698,9 +705,24 @@ public partial class MainPage : ContentPage
             return saveSucceeded ? PendingChangeChoice.Continue : PendingChangeChoice.Cancel;
         }
 
-        return action == "Discard changes"
+        if (action != "Discard changes")
+        {
+            return PendingChangeChoice.Cancel;
+        }
+
+        var confirmed = await ConfirmDiscardUnsavedChangesAsync(pendingAction);
+        return confirmed
             ? PendingChangeChoice.Discard
             : PendingChangeChoice.Cancel;
+    }
+
+    private async Task<bool> ConfirmDiscardUnsavedChangesAsync(string pendingAction)
+    {
+        return await DisplayAlertAsync(
+            "Discard unsaved changes",
+            $"Discard all unsaved changes and {pendingAction}? Unsaved additions, edits, and deletes will be lost.",
+            "Discard changes",
+            "Cancel");
     }
 
     private async Task<bool> SaveVaultAsync()
@@ -765,8 +787,8 @@ public partial class MainPage : ContentPage
 
             var confirmed = await DisplayAlertAsync(
                 "Restore backup",
-                "The current vault will be backed up, then replaced by the selected encrypted backup.",
-                "Restore",
+                $"Restore {_selectedBackupArtifact.FileName}? The current vault will be backed up first, then replaced by this encrypted backup.",
+                "Restore backup",
                 "Cancel");
             if (!confirmed)
             {
@@ -844,8 +866,8 @@ public partial class MainPage : ContentPage
 
             var confirmed = await DisplayAlertAsync(
                 "Change master password",
-                "An encrypted backup will be created first, then the vault will be rewritten with the new master password.",
-                "Change",
+                "Change the master password for this vault? An encrypted backup will be created first, then the vault will be rewritten. The old master password will no longer unlock the current vault.",
+                "Change password",
                 "Cancel");
             if (!confirmed)
             {
