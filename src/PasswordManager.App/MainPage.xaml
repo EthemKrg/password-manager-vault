@@ -596,6 +596,43 @@
                     </ScrollView>
                 </Border>
             </Grid>
+
+            <Border x:Name="PrivacyMaskPanel"
+                    Style="{StaticResource Panel}"
+                    WidthRequest="520"
+                    HorizontalOptions="Center"
+                    VerticalOptions="Center"
+                    IsVisible="False">
+                <VerticalStackLayout Spacing="16">
+                    <Label x:Name="PrivacyMaskTitleLabel"
+                           Text="Vault protected"
+                           FontSize="22"
+                           FontAttributes="Bold"
+                           TextColor="#20231F" />
+                    <Label x:Name="PrivacyMaskMessageLabel"
+                           FontSize="14"
+                           TextColor="#596157" />
+                    <Grid ColumnDefinitions="*,*"
+                          ColumnSpacing="12">
+                        <Button x:Name="PrivacySaveAndLockButton"
+                                Text="Save and lock"
+                                Pressed="OnButtonPressed"
+                                Released="OnButtonReleased"
+                                Focused="OnButtonFocused"
+                                Unfocused="OnButtonUnfocused"
+                                Clicked="OnPrivacySaveAndLockClicked" />
+                        <Button x:Name="PrivacyDiscardAndLockButton"
+                                Grid.Column="1"
+                                Text="Discard and lock"
+                                Style="{StaticResource DangerButton}"
+                                Pressed="OnButtonPressed"
+                                Released="OnButtonReleased"
+                                Focused="OnButtonFocused"
+                                Unfocused="OnButtonUnfocused"
+                                Clicked="OnPrivacyDiscardAndLockClicked" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
         </Grid>
     </Grid>
 </ContentPage>
