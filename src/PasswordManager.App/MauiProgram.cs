@@ -19,6 +19,7 @@ public static class MauiProgram
             });
 
         builder.Services.AddSingleton<IVaultService, DgNetVaultService>();
+        builder.Services.AddSingleton<IExternalVaultAnalyzer, DgNetExternalVaultAnalyzer>();
         builder.Services.AddSingleton<IVaultSession>(services =>
             new VaultSession(services.GetRequiredService<IVaultService>()));
         builder.Services.AddSingleton<IVaultFilePicker, WindowsVaultFilePicker>();
