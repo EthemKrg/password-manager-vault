@@ -160,16 +160,7 @@ public sealed class DgNetVaultService : IVaultService
 
     public static AccountEntry CreateEntry(AccountEntryDraft draft)
     {
-        ArgumentNullException.ThrowIfNull(draft);
-
-        return new AccountEntry(
-            Guid.NewGuid(),
-            draft.ServiceName,
-            draft.WebsiteUrl,
-            draft.UsernameOrEmail,
-            draft.Password,
-            draft.Notes,
-            NormalizeTags(draft.Tags));
+        return AccountEntry.Create(draft);
     }
 
     private static AccountEntry MapEntry(Entry entry)

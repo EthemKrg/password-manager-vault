@@ -1,0 +1,304 @@
+namespace PasswordManager.Core;
+
+public sealed class VaultSession : IVaultSession
+{
+    private readonly IVaultService _vaultService;
+    private string? _masterPassword;
+
+    public VaultSession(IVaultService vaultService)
+    {
+        _vaultService = vaultService ?? throw new ArgumentNullException(nameof(vaultService));
+    }
+
+    public VaultSessionState State { get; private set; } = VaultSessionState.NoVaultLoaded;
+
+    public string? VaultPath { get; private set; }
+
+    public VaultSnapshot? CurrentSnapshot { get; private set; }
+
+    public bool HasUnsavedChanges { get; private set; }
+
+    public async Task<VaultOperationResult> CreateAsync(
+        string vaultPath,
+        string masterPassword,
+        CancellationToken cancellationToken = default)
+    {
+        var replacementCheck = EnsureCanReplaceCurrentSession();
+        if (replacementCheck is not null)
+        {
+            return replacementCheck;
+        }
+
+        var createResult = await _vaultService.CreateAsync(vaultPath, masterPassword, cancellationToken);
+        if (!createResult.Succeeded)
+        {
+            return createResult;
+        }
+
+        var loadResult = await _vaultService.LoadAsync(vaultPath, masterPassword, cancellationToken);
+        if (!loadResult.Succeeded)
+        {
+            return VaultOperationResult.Failure(loadResult.Error, loadResult.Message);
+        }
+
+        SetUnlocked(vaultPath, masterPassword, loadResult.Value!);
+        return VaultOperationResult.Success();
+    }
+
+    public async Task<VaultOperationResult> UnlockAsync(
+        string vaultPath,
+        string masterPassword,
+        CancellationToken cancellationToken = default)
+    {
+        var replacementCheck = EnsureCanReplaceCurrentSession();
+        if (replacementCheck is not null)
+        {
+            return replacementCheck;
+        }
+
+        return await LoadIntoSessionAsync(vaultPath, masterPassword, cancellationToken);
+    }
+
+    public async Task<VaultOperationResult> UnlockCurrentAsync(
+        string masterPassword,
+        CancellationToken cancellationToken = default)
+    {
+        if (State == VaultSessionState.Unlocked)
+        {
+            return VaultOperationResult.Success();
+        }
+
+        if (string.IsNullOrWhiteSpace(VaultPath))
+        {
+            return VaultOperationResult.Failure(VaultError.NoVaultLoaded);
+        }
+
+        return await LoadIntoSessionAsync(VaultPath, masterPassword, cancellationToken);
+    }
+
+    public VaultOperationResult<AccountEntry> AddEntry(AccountEntryDraft draft)
+    {
+        var stateCheck = EnsureUnlocked();
+        if (stateCheck is not null)
+        {
+            return VaultOperationResult<AccountEntry>.Failure(stateCheck.Error, stateCheck.Message);
+        }
+
+        try
+        {
+            var entry = AccountEntry.Create(draft);
+            var addResult = AddEntryToCurrentSnapshot(entry);
+            return addResult.Succeeded
+                ? VaultOperationResult<AccountEntry>.Success(entry)
+                : VaultOperationResult<AccountEntry>.Failure(addResult.Error, addResult.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            return VaultOperationResult<AccountEntry>.Failure(VaultError.InvalidEntry, ex.GetType().Name);
+        }
+    }
+
+    public VaultOperationResult AddEntry(AccountEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        var stateCheck = EnsureUnlocked();
+        if (stateCheck is not null)
+        {
+            return stateCheck;
+        }
+
+        return AddEntryToCurrentSnapshot(entry);
+    }
+
+    public VaultOperationResult UpdateEntry(AccountEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        var stateCheck = EnsureUnlocked();
+        if (stateCheck is not null)
+        {
+            return stateCheck;
+        }
+
+        try
+        {
+            CurrentSnapshot = CurrentSnapshot!.Update(entry);
+            HasUnsavedChanges = true;
+            return VaultOperationResult.Success();
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return VaultOperationResult.Failure(VaultError.EntryNotFound, ex.GetType().Name);
+        }
+        catch (ArgumentException ex)
+        {
+            return VaultOperationResult.Failure(VaultError.InvalidEntry, ex.GetType().Name);
+        }
+    }
+
+    public VaultOperationResult DeleteEntry(Guid entryId)
+    {
+        var stateCheck = EnsureUnlocked();
+        if (stateCheck is not null)
+        {
+            return stateCheck;
+        }
+
+        try
+        {
+            CurrentSnapshot = CurrentSnapshot!.Delete(entryId);
+            HasUnsavedChanges = true;
+            return VaultOperationResult.Success();
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return VaultOperationResult.Failure(VaultError.EntryNotFound, ex.GetType().Name);
+        }
+    }
+
+    public VaultOperationResult<IReadOnlyList<AccountEntry>> Search(VaultSearchQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        var stateCheck = EnsureUnlocked();
+        if (stateCheck is not null)
+        {
+            return VaultOperationResult<IReadOnlyList<AccountEntry>>.Failure(
+                stateCheck.Error,
+                stateCheck.Message);
+        }
+
+        return VaultOperationResult<IReadOnlyList<AccountEntry>>.Success(CurrentSnapshot!.Search(query));
+    }
+
+    public async Task<VaultOperationResult> SaveAsync(CancellationToken cancellationToken = default)
+    {
+        var stateCheck = EnsureUnlocked();
+        if (stateCheck is not null)
+        {
+            return stateCheck;
+        }
+
+        var saveResult = await _vaultService.SaveAsync(
+            VaultPath!,
+            _masterPassword!,
+            CurrentSnapshot!,
+            cancellationToken);
+        if (!saveResult.Succeeded)
+        {
+            return saveResult;
+        }
+
+        var reloadResult = await _vaultService.LoadAsync(VaultPath!, _masterPassword!, cancellationToken);
+        if (!reloadResult.Succeeded)
+        {
+            return VaultOperationResult.Failure(reloadResult.Error, reloadResult.Message);
+        }
+
+        CurrentSnapshot = reloadResult.Value!;
+        HasUnsavedChanges = false;
+        return VaultOperationResult.Success();
+    }
+
+    private VaultOperationResult AddEntryToCurrentSnapshot(AccountEntry entry)
+    {
+        try
+        {
+            CurrentSnapshot = CurrentSnapshot!.Add(entry);
+            HasUnsavedChanges = true;
+            return VaultOperationResult.Success();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return VaultOperationResult.Failure(VaultError.EntryAlreadyExists, ex.GetType().Name);
+        }
+        catch (ArgumentException ex)
+        {
+            return VaultOperationResult.Failure(VaultError.InvalidEntry, ex.GetType().Name);
+        }
+    }
+
+    public VaultOperationResult Lock(bool discardUnsavedChanges = false)
+    {
+        var dirtyCheck = EnsureCanDiscardUnsavedChanges(discardUnsavedChanges);
+        if (dirtyCheck is not null)
+        {
+            return dirtyCheck;
+        }
+
+        CurrentSnapshot = null;
+        _masterPassword = null;
+        HasUnsavedChanges = false;
+        State = string.IsNullOrWhiteSpace(VaultPath)
+            ? VaultSessionState.NoVaultLoaded
+            : VaultSessionState.Locked;
+
+        return VaultOperationResult.Success();
+    }
+
+    public VaultOperationResult Close(bool discardUnsavedChanges = false)
+    {
+        var dirtyCheck = EnsureCanDiscardUnsavedChanges(discardUnsavedChanges);
+        if (dirtyCheck is not null)
+        {
+            return dirtyCheck;
+        }
+
+        CurrentSnapshot = null;
+        VaultPath = null;
+        _masterPassword = null;
+        HasUnsavedChanges = false;
+        State = VaultSessionState.NoVaultLoaded;
+
+        return VaultOperationResult.Success();
+    }
+
+    private async Task<VaultOperationResult> LoadIntoSessionAsync(
+        string vaultPath,
+        string masterPassword,
+        CancellationToken cancellationToken)
+    {
+        var loadResult = await _vaultService.LoadAsync(vaultPath, masterPassword, cancellationToken);
+        if (!loadResult.Succeeded)
+        {
+            return VaultOperationResult.Failure(loadResult.Error, loadResult.Message);
+        }
+
+        SetUnlocked(vaultPath, masterPassword, loadResult.Value!);
+        return VaultOperationResult.Success();
+    }
+
+    private void SetUnlocked(string vaultPath, string masterPassword, VaultSnapshot snapshot)
+    {
+        VaultPath = vaultPath;
+        _masterPassword = masterPassword;
+        CurrentSnapshot = snapshot;
+        HasUnsavedChanges = false;
+        State = VaultSessionState.Unlocked;
+    }
+
+    private VaultOperationResult? EnsureUnlocked()
+    {
+        return State switch
+        {
+            VaultSessionState.Unlocked when CurrentSnapshot is not null => null,
+            VaultSessionState.Locked => VaultOperationResult.Failure(VaultError.VaultLocked),
+            _ => VaultOperationResult.Failure(VaultError.NoVaultLoaded)
+        };
+    }
+
+    private VaultOperationResult? EnsureCanReplaceCurrentSession()
+    {
+        return HasUnsavedChanges
+            ? VaultOperationResult.Failure(VaultError.UnsavedChanges)
+            : null;
+    }
+
+    private VaultOperationResult? EnsureCanDiscardUnsavedChanges(bool discardUnsavedChanges)
+    {
+        return HasUnsavedChanges && !discardUnsavedChanges
+            ? VaultOperationResult.Failure(VaultError.UnsavedChanges)
+            : null;
+    }
+}
