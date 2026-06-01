@@ -9,7 +9,8 @@ public sealed class VaultSnapshotTests
     {
         var original = VaultSnapshot.Empty;
         var entry = CreateEntry("GitHub", "dev@example.test", ["source"]);
-        var added = original.Add(entry);
+        var snapshotFromFile = new VaultSnapshot([], "ABC123");
+        var added = snapshotFromFile.Add(entry);
         var updatedEntry = entry with { UsernameOrEmail = "updated@example.test", Notes = "Updated notes" };
         var updated = added.Update(updatedEntry);
         var deleted = updated.Delete(entry.Id);
@@ -18,6 +19,9 @@ public sealed class VaultSnapshotTests
         Assert.Equal(entry, Assert.Single(added.Entries));
         Assert.Equal(updatedEntry, Assert.Single(updated.Entries));
         Assert.Empty(deleted.Entries);
+        Assert.Equal("ABC123", added.SourceFingerprint);
+        Assert.Equal("ABC123", updated.SourceFingerprint);
+        Assert.Equal("ABC123", deleted.SourceFingerprint);
     }
 
     [Fact]
@@ -72,6 +76,17 @@ public sealed class VaultSnapshotTests
     [Fact]
     public void Constructors_RejectInvalidRequiredFieldsAndTags()
     {
+        var entry = CreateEntry("Example", "user@example.test", []);
+
+        Assert.Throws<ArgumentException>(() => new AccountEntry(
+            Guid.Empty,
+            "Example",
+            "",
+            "",
+            "password",
+            "",
+            []));
+        Assert.Throws<ArgumentException>(() => entry with { Id = Guid.Empty });
         Assert.Throws<ArgumentException>(() => new AccountEntryDraft(
             " ",
             "https://example.test",

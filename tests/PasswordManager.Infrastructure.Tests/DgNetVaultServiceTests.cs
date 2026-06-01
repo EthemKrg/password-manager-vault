@@ -8,6 +8,8 @@ public sealed class DgNetVaultServiceTests
 {
     private const string MasterPassword = "correct horse battery staple - automated tests only";
     private const string WrongPassword = "wrong password - automated tests only";
+    private const string AppVaultName = "Password Manager Vault";
+    private const string AppVaultMarker = "PasswordManagerVault:v1";
 
     [Fact]
     public async Task CreateAsync_CreatesEmptyVaultAndDoesNotOverwriteExistingVault()
@@ -89,23 +91,92 @@ public sealed class DgNetVaultServiceTests
             .Add(secondEntry);
 
         var initialSaveResult = await service.SaveAsync(vaultPath, MasterPassword, initialSnapshot);
-        var updatedFirstEntry = firstEntry with
+        var initialLoadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var loadedSnapshot = initialLoadResult.Value!;
+        var loadedFirstEntry = loadedSnapshot.Entries.Single(entry => entry.Id == firstEntry.Id);
+        var updatedFirstEntry = loadedFirstEntry with
         {
             UsernameOrEmail = "updated@example.test",
             Notes = "Updated after initial save"
         };
-        var updatedSnapshot = initialSnapshot
+        var updatedSnapshot = loadedSnapshot
             .Update(updatedFirstEntry)
             .Delete(secondEntry.Id);
         var updateSaveResult = await service.SaveAsync(vaultPath, MasterPassword, updatedSnapshot);
         var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
 
         Assert.True(initialSaveResult.Succeeded);
+        Assert.True(initialLoadResult.Succeeded);
         Assert.True(updateSaveResult.Succeeded);
         Assert.True(loadResult.Succeeded);
 
         var loadedEntry = Assert.Single(loadResult.Value!.Entries);
         AssertEntryEqual(updatedFirstEntry, loadedEntry);
+    }
+
+    [Fact]
+    public async Task SaveAsync_RejectsStaleSnapshotWhenVaultChangedOnDisk()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        var originalEntry = CreateEntry(serviceName: "Original", usernameOrEmail: "original@example.test");
+
+        var initialSaveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(originalEntry));
+        var staleLoadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var currentLoadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var externalUpdate = currentLoadResult.Value!.Update(
+            currentLoadResult.Value.Entries.Single() with
+            {
+                Notes = "Saved by another process"
+            });
+        var externalSaveResult = await service.SaveAsync(vaultPath, MasterPassword, externalUpdate);
+        var staleUpdate = staleLoadResult.Value!.Update(
+            staleLoadResult.Value.Entries.Single() with
+            {
+                Notes = "Stale local edit"
+            });
+
+        var staleSaveResult = await service.SaveAsync(vaultPath, MasterPassword, staleUpdate);
+        var finalLoadResult = await service.LoadAsync(vaultPath, MasterPassword);
+
+        Assert.True(initialSaveResult.Succeeded);
+        Assert.True(staleLoadResult.Succeeded);
+        Assert.True(currentLoadResult.Succeeded);
+        Assert.True(externalSaveResult.Succeeded);
+        Assert.False(staleSaveResult.Succeeded);
+        Assert.Equal(VaultError.StaleVaultSnapshot, staleSaveResult.Error);
+        Assert.True(finalLoadResult.Succeeded);
+        Assert.Equal("Saved by another process", Assert.Single(finalLoadResult.Value!.Entries).Notes);
+    }
+
+    [Fact]
+    public async Task SaveAsync_RequiresLoadedSnapshotWhenOverwritingExistingVault()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        var originalEntry = CreateEntry(serviceName: "Original", usernameOrEmail: "original@example.test");
+        var replacementEntry = CreateEntry(serviceName: "Replacement", usernameOrEmail: "replacement@example.test");
+
+        var initialSaveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(originalEntry));
+        var overwriteResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(replacementEntry));
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+
+        Assert.True(initialSaveResult.Succeeded);
+        Assert.False(overwriteResult.Succeeded);
+        Assert.Equal(VaultError.StaleVaultSnapshot, overwriteResult.Error);
+        Assert.True(loadResult.Succeeded);
+        AssertEntryEqual(originalEntry, Assert.Single(loadResult.Value!.Entries));
     }
 
     [Fact]
@@ -187,6 +258,65 @@ public sealed class DgNetVaultServiceTests
         Assert.Equal(VaultError.UnsupportedVaultFeatures, saveResult.Error);
     }
 
+    [Fact]
+    public async Task LoadAndSaveAsync_RejectMarkerSpoofedVaultsWithUnsupportedMetadata()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        CreateMarkerSpoofedVault(
+            vaultPath,
+            database => database.Metadata.CustomIcons.Add(new CustomIcon
+            {
+                Name = "external custom icon",
+                Data = [1, 2, 3]
+            }));
+
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var saveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(CreateEntry(serviceName: "Replacement")));
+
+        Assert.False(loadResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, loadResult.Error);
+        Assert.False(saveResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, saveResult.Error);
+    }
+
+    [Fact]
+    public async Task LoadAndSaveAsync_RejectMarkerSpoofedVaultsWithUnsupportedEntryFeatures()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        CreateMarkerSpoofedVault(
+            vaultPath,
+            database =>
+            {
+                var entry = database.RootGroup.Entries.Single();
+                entry.IconId = 7;
+                entry.Times.Expires = true;
+                entry.Times.ExpiryTime = DateTime.UtcNow.AddDays(1);
+                entry.AutoType.Associations.Add(new AutoTypeAssociation
+                {
+                    Window = "*",
+                    Sequence = "{PASSWORD}"
+                });
+            });
+
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var saveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(CreateEntry(serviceName: "Replacement")));
+
+        Assert.False(loadResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, loadResult.Error);
+        Assert.False(saveResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, saveResult.Error);
+    }
+
     private static AccountEntry CreateEntry(
         string serviceName = "GitHub",
         string websiteUrl = "https://github.com",
@@ -229,6 +359,24 @@ public sealed class DgNetVaultServiceTests
             Tags = string.Join(';', entry.Tags)
         });
 
+        database.SaveAs(vaultPath);
+    }
+
+    private static void CreateMarkerSpoofedVault(string vaultPath, Action<Database> mutate)
+    {
+        using var database = Database.Create(MasterPassword);
+        database.Metadata.Name = AppVaultName;
+        database.Metadata.Description = AppVaultMarker;
+        database.RootGroup.AddEntry(new Entry
+        {
+            Title = "External",
+            UserName = "external@example.test",
+            Password = "external password",
+            Url = "https://external.example.test",
+            Notes = "External marker spoof",
+            Tags = "external"
+        });
+        mutate(database);
         database.SaveAs(vaultPath);
     }
 

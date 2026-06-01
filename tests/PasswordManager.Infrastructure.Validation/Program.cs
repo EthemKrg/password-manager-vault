@@ -24,7 +24,9 @@ var account = DgNetVaultService.CreateEntry(new AccountEntryDraft(
     "Initial service validation entry",
     ["dev", "source"]));
 
-var saveResult = await service.SaveAsync(vaultPath, MasterPassword, new VaultSnapshot([account]));
+var emptyLoadResult = await service.LoadAsync(vaultPath, MasterPassword);
+var saveSnapshot = emptyLoadResult.Value?.Add(account) ?? VaultSnapshot.Empty.Add(account);
+var saveResult = await service.SaveAsync(vaultPath, MasterPassword, saveSnapshot);
 var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
 var wrongPasswordResult = await service.LoadAsync(vaultPath, WrongPassword);
 
@@ -39,6 +41,7 @@ var roundtripPassed = loadedAccount is not null
     && loadedAccount.Tags.SequenceEqual(account.Tags);
 
 var passed = createResult.Succeeded
+    && emptyLoadResult.Succeeded
     && saveResult.Succeeded
     && loadResult.Succeeded
     && !wrongPasswordResult.Succeeded
@@ -46,6 +49,7 @@ var passed = createResult.Succeeded
 
 Console.WriteLine("Infrastructure validation summary");
 Console.WriteLine($"Create empty vault: {(createResult.Succeeded ? "PASS" : "FAIL")}");
+Console.WriteLine($"Load empty vault before save: {(emptyLoadResult.Succeeded ? "PASS" : "FAIL")}");
 Console.WriteLine($"Save snapshot: {(saveResult.Succeeded ? "PASS" : "FAIL")}");
 Console.WriteLine($"Load snapshot: {(loadResult.Succeeded ? "PASS" : "FAIL")}");
 Console.WriteLine($"Roundtrip account fields: {(roundtripPassed ? "PASS" : "FAIL")}");
