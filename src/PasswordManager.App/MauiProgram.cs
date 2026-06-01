@@ -29,6 +29,7 @@ public static class MauiProgram
                 vaultBackupService: services.GetRequiredService<IVaultBackupService>()));
         builder.Services.AddSingleton<IVaultFilePicker, WindowsVaultFilePicker>();
         builder.Services.AddSingleton<IClipboardService, MauiClipboardService>();
+        builder.Services.AddSingleton<ICrashProtectionService, CrashProtectionService>();
         builder.Services.AddSingleton<MainPage>();
 
 #if DEBUG

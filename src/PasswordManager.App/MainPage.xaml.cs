@@ -89,6 +89,42 @@ public partial class MainPage : ContentPage
         await ClearTrackedClipboardAsync(updateStatus: false);
     }
 
+    public async Task HandleCrashProtectionAsync(CrashDiagnostic diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostic);
+
+        HidePassword();
+        CancelAutoLockCountdown();
+        UnlockPasswordEntry.Text = string.Empty;
+        RestorePasswordEntry.Text = string.Empty;
+        ClearChangeMasterPasswordFields();
+        await ClearTrackedClipboardAsync(updateStatus: false);
+
+        if (_vaultSession.State == VaultSessionState.Unlocked)
+        {
+            if (_vaultSession.HasUnsavedChanges)
+            {
+                ActivatePrivacyMask("Unexpected app fault. Sensitive content is masked until you save or discard.");
+                SetFeedback("Unexpected app fault handled. Sensitive content is protected.");
+                return;
+            }
+
+            var lockResult = _vaultSession.Lock();
+            if (lockResult.Succeeded)
+            {
+                ClearUnlockedUiState();
+                SetFeedback("Unexpected app fault handled. Vault locked.");
+                return;
+            }
+
+            ActivatePrivacyMask("Unexpected app fault. Sensitive content is masked.");
+            SetFeedback("Unexpected app fault handled. Sensitive content is protected.");
+            return;
+        }
+
+        SetFeedback("Unexpected app fault handled. Sensitive content is protected.");
+    }
+
     private async void OnCreateVaultClicked(object? sender, EventArgs e)
     {
         if (!TryBeginOperation())
