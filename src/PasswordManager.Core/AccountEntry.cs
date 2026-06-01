@@ -11,6 +11,9 @@ public sealed record AccountEntry
     private string _usernameOrEmail = string.Empty;
     private string _password = string.Empty;
     private string _notes = string.Empty;
+    private DateTimeOffset _createdAtUtc;
+    private DateTimeOffset _updatedAtUtc;
+    private DateTimeOffset _passwordChangedAtUtc;
 
     public AccountEntry(
         Guid id,
@@ -19,7 +22,11 @@ public sealed record AccountEntry
         string usernameOrEmail,
         string password,
         string notes,
-        IReadOnlyList<string> tags)
+        IReadOnlyList<string> tags,
+        bool isFavorite,
+        DateTimeOffset createdAtUtc,
+        DateTimeOffset updatedAtUtc,
+        DateTimeOffset passwordChangedAtUtc)
     {
         Id = id;
         ServiceName = serviceName;
@@ -28,11 +35,22 @@ public sealed record AccountEntry
         Password = password;
         Notes = notes;
         Tags = tags;
+        IsFavorite = isFavorite;
+        CreatedAtUtc = createdAtUtc;
+        UpdatedAtUtc = updatedAtUtc;
+        PasswordChangedAtUtc = passwordChangedAtUtc;
+        ValidateTimestampOrder();
     }
 
     public static AccountEntry Create(AccountEntryDraft draft)
     {
+        return Create(draft, TimeProvider.System.GetUtcNow());
+    }
+
+    public static AccountEntry Create(AccountEntryDraft draft, DateTimeOffset nowUtc)
+    {
         ArgumentNullException.ThrowIfNull(draft);
+        var normalizedNowUtc = NormalizeUtcTimestamp(nowUtc, nameof(nowUtc));
 
         return new AccountEntry(
             Guid.NewGuid(),
@@ -41,7 +59,11 @@ public sealed record AccountEntry
             draft.UsernameOrEmail,
             draft.Password,
             draft.Notes,
-            draft.Tags);
+            draft.Tags,
+            draft.IsFavorite,
+            normalizedNowUtc,
+            normalizedNowUtc,
+            normalizedNowUtc);
     }
 
     public Guid Id
@@ -86,6 +108,38 @@ public sealed record AccountEntry
     {
         get => _tags;
         init => _tags = NormalizeTags(value);
+    }
+
+    public bool IsFavorite { get; init; }
+
+    public DateTimeOffset CreatedAtUtc
+    {
+        get => _createdAtUtc;
+        init
+        {
+            _createdAtUtc = NormalizeUtcTimestamp(value, nameof(CreatedAtUtc));
+            ValidateTimestampOrderIfComplete();
+        }
+    }
+
+    public DateTimeOffset UpdatedAtUtc
+    {
+        get => _updatedAtUtc;
+        init
+        {
+            _updatedAtUtc = NormalizeUtcTimestamp(value, nameof(UpdatedAtUtc));
+            ValidateTimestampOrderIfComplete();
+        }
+    }
+
+    public DateTimeOffset PasswordChangedAtUtc
+    {
+        get => _passwordChangedAtUtc;
+        init
+        {
+            _passwordChangedAtUtc = NormalizeUtcTimestamp(value, nameof(PasswordChangedAtUtc));
+            ValidateTimestampOrderIfComplete();
+        }
     }
 
     private static string NormalizeRequired(string? value, string fieldName, bool trim)
@@ -139,5 +193,47 @@ public sealed record AccountEntry
         }
 
         return normalized;
+    }
+
+    private static DateTimeOffset NormalizeUtcTimestamp(DateTimeOffset value, string fieldName)
+    {
+        if (value == default)
+        {
+            throw new ArgumentException($"{fieldName} is required.", fieldName);
+        }
+
+        if (value.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException($"{fieldName} must be UTC.", fieldName);
+        }
+
+        return value;
+    }
+
+    private void ValidateTimestampOrderIfComplete()
+    {
+        if (_createdAtUtc == default || _updatedAtUtc == default || _passwordChangedAtUtc == default)
+        {
+            return;
+        }
+
+        ValidateTimestampOrder();
+    }
+
+    private void ValidateTimestampOrder()
+    {
+        if (CreatedAtUtc > PasswordChangedAtUtc)
+        {
+            throw new ArgumentException(
+                "Created timestamp cannot be later than password changed timestamp.",
+                nameof(CreatedAtUtc));
+        }
+
+        if (PasswordChangedAtUtc > UpdatedAtUtc)
+        {
+            throw new ArgumentException(
+                "Password changed timestamp cannot be later than updated timestamp.",
+                nameof(PasswordChangedAtUtc));
+        }
     }
 }

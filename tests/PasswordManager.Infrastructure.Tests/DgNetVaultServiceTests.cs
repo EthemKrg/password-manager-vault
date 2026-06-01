@@ -10,6 +10,13 @@ public sealed class DgNetVaultServiceTests
     private const string WrongPassword = "wrong password - automated tests only";
     private const string AppVaultName = "Password Manager Vault";
     private const string AppVaultMarker = "PasswordManagerVault:v1";
+    private const string AppFavoriteKey = "PMV.IsFavorite";
+    private const string AppCreatedAtKey = "PMV.CreatedAtUtc";
+    private const string AppUpdatedAtKey = "PMV.UpdatedAtUtc";
+    private const string AppPasswordChangedAtKey = "PMV.PasswordChangedAtUtc";
+    private static readonly DateTimeOffset EntryCreatedAtUtc = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+    private static readonly DateTimeOffset EntryPasswordChangedAtUtc = EntryCreatedAtUtc.AddMinutes(7);
+    private static readonly DateTimeOffset EntryUpdatedAtUtc = EntryPasswordChangedAtUtc.AddMinutes(11);
 
     [Fact]
     public async Task CreateAsync_CreatesEmptyVaultAndDoesNotOverwriteExistingVault()
@@ -49,6 +56,70 @@ public sealed class DgNetVaultServiceTests
 
         var loadedEntry = Assert.Single(loadResult.Value!.Entries);
         AssertEntryEqual(entry, loadedEntry);
+    }
+
+    [Fact]
+    public async Task SaveAndLoadAsync_RoundtripsFavoriteAndTimestampMetadata()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        var entry = CreateEntry(isFavorite: true);
+        var snapshot = VaultSnapshot.Empty.Add(entry);
+
+        var saveResult = await service.SaveAsync(vaultPath, MasterPassword, snapshot);
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+
+        Assert.True(saveResult.Succeeded);
+        Assert.True(loadResult.Succeeded);
+
+        var loadedEntry = Assert.Single(loadResult.Value!.Entries);
+        AssertEntryEqual(entry, loadedEntry);
+
+        using var database = Database.Open(vaultPath, MasterPassword);
+        var rawEntry = Assert.Single(database.RootGroup.Entries);
+        AssertMetadataString(rawEntry, AppFavoriteKey, "true");
+        AssertMetadataString(rawEntry, AppCreatedAtKey, EntryCreatedAtUtc.ToString("O"));
+        AssertMetadataString(rawEntry, AppUpdatedAtKey, EntryUpdatedAtUtc.ToString("O"));
+        AssertMetadataString(rawEntry, AppPasswordChangedAtKey, EntryPasswordChangedAtUtc.ToString("O"));
+        Assert.Equal(EntryCreatedAtUtc.UtcDateTime, rawEntry.Times.CreationTime);
+        Assert.Equal(EntryUpdatedAtUtc.UtcDateTime, rawEntry.Times.LastModificationTime);
+    }
+
+    [Fact]
+    public async Task LoadAndSaveAsync_MetadataLessAppVaultUsesKeePassTimesAndWritesAppMetadata()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        CreateMarkerSpoofedVault(
+            vaultPath,
+            database =>
+            {
+                var entry = database.RootGroup.Entries.Single();
+                entry.Times = new Times
+                {
+                    CreationTime = EntryCreatedAtUtc.UtcDateTime,
+                    LastModificationTime = EntryUpdatedAtUtc.UtcDateTime
+                };
+            });
+
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+
+        Assert.True(loadResult.Succeeded);
+        var loadedEntry = Assert.Single(loadResult.Value!.Entries);
+        var saveResult = await service.SaveAsync(vaultPath, MasterPassword, loadResult.Value!);
+
+        Assert.False(loadedEntry.IsFavorite);
+        Assert.Equal(EntryCreatedAtUtc, loadedEntry.CreatedAtUtc);
+        Assert.Equal(EntryUpdatedAtUtc, loadedEntry.UpdatedAtUtc);
+        Assert.Equal(EntryUpdatedAtUtc, loadedEntry.PasswordChangedAtUtc);
+        Assert.True(saveResult.Succeeded);
+
+        using var database = Database.Open(vaultPath, MasterPassword);
+        var rawEntry = Assert.Single(database.RootGroup.Entries);
+        AssertMetadataString(rawEntry, AppFavoriteKey, "false");
+        AssertMetadataString(rawEntry, AppPasswordChangedAtKey, EntryUpdatedAtUtc.ToString("O"));
     }
 
     [Fact]
@@ -317,21 +388,106 @@ public sealed class DgNetVaultServiceTests
         Assert.Equal(VaultError.UnsupportedVaultFeatures, saveResult.Error);
     }
 
+    [Fact]
+    public async Task LoadAndSaveAsync_RejectUnknownEntryCustomStrings()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        CreateMarkerSpoofedVault(
+            vaultPath,
+            database =>
+            {
+                var entry = database.RootGroup.Entries.Single();
+                entry.Strings["External.CustomField"] = CreateEntryString("external value");
+            });
+
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var saveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(CreateEntry(serviceName: "Replacement")));
+
+        Assert.False(loadResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, loadResult.Error);
+        Assert.False(saveResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, saveResult.Error);
+    }
+
+    [Fact]
+    public async Task LoadAndSaveAsync_RejectInvalidAppEntryMetadata()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        CreateMarkerSpoofedVault(
+            vaultPath,
+            database =>
+            {
+                var entry = database.RootGroup.Entries.Single();
+                entry.Strings[AppFavoriteKey] = CreateEntryString("True");
+                entry.Strings[AppCreatedAtKey] = CreateEntryString("not-a-date");
+            });
+
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var saveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(CreateEntry(serviceName: "Replacement")));
+
+        Assert.False(loadResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, loadResult.Error);
+        Assert.False(saveResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, saveResult.Error);
+    }
+
+    [Fact]
+    public async Task LoadAndSaveAsync_RejectProtectedAppEntryMetadata()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        CreateMarkerSpoofedVault(
+            vaultPath,
+            database =>
+            {
+                var entry = database.RootGroup.Entries.Single();
+                entry.Strings[AppFavoriteKey] = CreateEntryString("true", protectedValue: true);
+            });
+
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var saveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(CreateEntry(serviceName: "Replacement")));
+
+        Assert.False(loadResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, loadResult.Error);
+        Assert.False(saveResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, saveResult.Error);
+    }
+
     private static AccountEntry CreateEntry(
         string serviceName = "GitHub",
         string websiteUrl = "https://github.com",
         string usernameOrEmail = "dev@example.test",
         string password = "SPK-AUTOMATED-TEST-1f97",
         string notes = "Automated test entry",
-        IReadOnlyList<string>? tags = null)
+        IReadOnlyList<string>? tags = null,
+        bool isFavorite = false)
     {
-        return DgNetVaultService.CreateEntry(new AccountEntryDraft(
+        return new AccountEntry(
+            Guid.NewGuid(),
             serviceName,
             websiteUrl,
             usernameOrEmail,
             password,
             notes,
-            tags ?? ["dev", "source"]));
+            tags ?? ["dev", "source"],
+            isFavorite,
+            EntryCreatedAtUtc,
+            EntryUpdatedAtUtc,
+            EntryPasswordChangedAtUtc);
     }
 
     private static void AssertEntryEqual(AccountEntry expected, AccountEntry actual)
@@ -343,6 +499,26 @@ public sealed class DgNetVaultServiceTests
         Assert.Equal(expected.Password, actual.Password);
         Assert.Equal(expected.Notes, actual.Notes);
         Assert.Equal(expected.Tags, actual.Tags);
+        Assert.Equal(expected.IsFavorite, actual.IsFavorite);
+        Assert.Equal(expected.CreatedAtUtc, actual.CreatedAtUtc);
+        Assert.Equal(expected.UpdatedAtUtc, actual.UpdatedAtUtc);
+        Assert.Equal(expected.PasswordChangedAtUtc, actual.PasswordChangedAtUtc);
+    }
+
+    private static void AssertMetadataString(Entry entry, string key, string expectedValue)
+    {
+        Assert.True(entry.Strings.TryGetValue(key, out var entryString));
+        Assert.Equal(expectedValue, entryString.Value);
+        Assert.False(entryString.Protected);
+    }
+
+    private static EntryString CreateEntryString(string value, bool protectedValue = false)
+    {
+        return new EntryString
+        {
+            Value = value,
+            Protected = protectedValue
+        };
     }
 
     private static void CreateUnmanagedVault(string vaultPath, AccountEntry entry)

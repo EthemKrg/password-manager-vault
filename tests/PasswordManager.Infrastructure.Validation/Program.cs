@@ -38,7 +38,11 @@ var roundtripPassed = loadedAccount is not null
     && loadedAccount.UsernameOrEmail == account.UsernameOrEmail
     && loadedAccount.Password == account.Password
     && loadedAccount.Notes == account.Notes
-    && loadedAccount.Tags.SequenceEqual(account.Tags);
+    && loadedAccount.Tags.SequenceEqual(account.Tags)
+    && loadedAccount.IsFavorite == account.IsFavorite
+    && loadedAccount.CreatedAtUtc == account.CreatedAtUtc
+    && loadedAccount.UpdatedAtUtc == account.UpdatedAtUtc
+    && loadedAccount.PasswordChangedAtUtc == account.PasswordChangedAtUtc;
 
 var passed = createResult.Succeeded
     && emptyLoadResult.Succeeded
