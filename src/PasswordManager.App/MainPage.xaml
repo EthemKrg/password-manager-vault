@@ -340,6 +340,11 @@
                                    FontSize="14"
                                    FontAttributes="Bold"
                                    TextColor="#596157" />
+                            <Label x:Name="PasswordHealthSummaryLabel"
+                                   Text="Unlock to check password health."
+                                   FontSize="12"
+                                   TextColor="#596157"
+                                   LineBreakMode="WordWrap" />
                             <Entry x:Name="CurrentMasterPasswordEntry"
                                    Placeholder="Current master password"
                                    IsPassword="True"
@@ -605,6 +610,26 @@
                                         Unfocused="OnButtonUnfocused"
                                         Clicked="OnCopyPasswordClicked" />
                             </Grid>
+                            <Border x:Name="PasswordHealthPanel"
+                                    Padding="10"
+                                    BackgroundColor="{StaticResource WarningSurface}"
+                                    Stroke="{StaticResource WarningLineBrush}"
+                                    StrokeThickness="1"
+                                    IsVisible="False">
+                                <Border.StrokeShape>
+                                    <RoundRectangle CornerRadius="8" />
+                                </Border.StrokeShape>
+                                <VerticalStackLayout Spacing="4">
+                                    <Label Text="Password warning"
+                                           FontSize="12"
+                                           FontAttributes="Bold"
+                                           TextColor="{StaticResource WarningText}" />
+                                    <Label x:Name="PasswordHealthDetailLabel"
+                                           FontSize="12"
+                                           TextColor="{StaticResource WarningText}"
+                                           LineBreakMode="WordWrap" />
+                                </VerticalStackLayout>
+                            </Border>
                             <Label Text="Password generator"
                                    FontSize="12"
                                    FontAttributes="Bold"

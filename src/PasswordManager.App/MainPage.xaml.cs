@@ -16,9 +16,11 @@ public partial class MainPage : ContentPage
     private readonly IVaultFilePicker _filePicker;
     private readonly IClipboardService _clipboardService;
     private readonly IPasswordGenerator _passwordGenerator;
+    private readonly IPasswordHealthAnalyzer _passwordHealthAnalyzer;
     private readonly ObservableCollection<AccountEntry> _entries = [];
     private readonly ObservableCollection<BackupArtifactViewModel> _backupArtifacts = [];
     private readonly ObservableCollection<ExternalPreviewViewModel> _externalPreviewEntries = [];
+    private PasswordHealthReport _passwordHealthReport = PasswordHealthReport.Empty;
     private AccountEntry? _selectedEntry;
     private BackupArtifactViewModel? _selectedBackupArtifact;
     private string? _pendingVaultPath;
@@ -37,7 +39,8 @@ public partial class MainPage : ContentPage
         IExternalVaultAnalyzer externalVaultAnalyzer,
         IVaultFilePicker filePicker,
         IClipboardService clipboardService,
-        IPasswordGenerator passwordGenerator)
+        IPasswordGenerator passwordGenerator,
+        IPasswordHealthAnalyzer passwordHealthAnalyzer)
     {
         InitializeComponent();
         _vaultSession = vaultSession;
@@ -45,6 +48,7 @@ public partial class MainPage : ContentPage
         _filePicker = filePicker;
         _clipboardService = clipboardService;
         _passwordGenerator = passwordGenerator;
+        _passwordHealthAnalyzer = passwordHealthAnalyzer;
         EntryCollection.ItemsSource = _entries;
         BackupCollection.ItemsSource = _backupArtifacts;
         ExternalPreviewCollection.ItemsSource = _externalPreviewEntries;
@@ -1150,10 +1154,12 @@ public partial class MainPage : ContentPage
 
         if (_vaultSession.State != VaultSessionState.Unlocked)
         {
+            _passwordHealthReport = PasswordHealthReport.Empty;
             UpdateUi();
             return;
         }
 
+        RefreshPasswordHealthReport();
         var searchResult = _vaultSession.Search(new VaultSearchQuery(SearchEntry.Text ?? string.Empty));
         if (!searchResult.Succeeded)
         {
@@ -1182,6 +1188,13 @@ public partial class MainPage : ContentPage
 
         RenderSelectedEntry();
         UpdateUi();
+    }
+
+    private void RefreshPasswordHealthReport()
+    {
+        _passwordHealthReport = _vaultSession.CurrentSnapshot is null
+            ? PasswordHealthReport.Empty
+            : _passwordHealthAnalyzer.Analyze(_vaultSession.CurrentSnapshot);
     }
 
     private async Task RefreshBackupArtifactsAsync(bool showFeedback)
@@ -1284,6 +1297,7 @@ public partial class MainPage : ContentPage
         FavoriteCheckBox.IsChecked = _selectedEntry.IsFavorite;
         SaveEntryButton.Text = "Update entry";
         DeleteEntryButton.IsEnabled = true;
+        RenderPasswordHealthForSelectedEntry();
         ApplyButtonState(DeleteEntryButton, pressed: false, focused: DeleteEntryButton.IsFocused, hovered: _hoveredButtons.Contains(DeleteEntryButton));
     }
 
@@ -1301,7 +1315,28 @@ public partial class MainPage : ContentPage
         TagsEntry.Text = string.Empty;
         SaveEntryButton.Text = "Add entry";
         DeleteEntryButton.IsEnabled = false;
+        PasswordHealthPanel.IsVisible = false;
+        PasswordHealthDetailLabel.Text = string.Empty;
         ApplyButtonState(DeleteEntryButton, pressed: false, focused: DeleteEntryButton.IsFocused, hovered: _hoveredButtons.Contains(DeleteEntryButton));
+    }
+
+    private void RenderPasswordHealthForSelectedEntry()
+    {
+        if (_selectedEntry is null)
+        {
+            PasswordHealthPanel.IsVisible = false;
+            PasswordHealthDetailLabel.Text = string.Empty;
+            return;
+        }
+
+        var issues = _passwordHealthReport
+            .GetIssuesForEntry(_selectedEntry.Id)
+            .OrderBy(issue => issue.Kind)
+            .ToArray();
+        PasswordHealthPanel.IsVisible = issues.Length > 0;
+        PasswordHealthDetailLabel.Text = issues.Length == 0
+            ? string.Empty
+            : string.Join(Environment.NewLine, issues.Select(DescribePasswordHealthIssue));
     }
 
     private void UpdateUi()
@@ -1327,6 +1362,10 @@ public partial class MainPage : ContentPage
         ChangeMasterPasswordButton.IsEnabled = isUnlocked && !_vaultSession.HasUnsavedChanges;
         EmptyListLabel.IsVisible = isUnlocked && _entries.Count == 0;
         EmptyBackupsLabel.IsVisible = isUnlocked && _backupArtifacts.Count == 0;
+        PasswordHealthSummaryLabel.Text = DescribePasswordHealthSummary(isUnlocked);
+        PasswordHealthSummaryLabel.TextColor = isUnlocked && _passwordHealthReport.HasIssues
+            ? GetResourceColor("WarningText", Colors.DarkGoldenrod)
+            : GetResourceColor("Muted", Colors.Gray);
         AnalyzeExternalVaultButton.IsVisible = !isUnlocked && hasPendingOpen && !isLocked;
         AnalyzeExternalVaultButton.IsEnabled = hasPendingOpen && !isLocked;
         ExternalAnalysisDivider.IsVisible = !isUnlocked && _hasExternalAnalysis;
@@ -1635,6 +1674,40 @@ public partial class MainPage : ContentPage
     private static string Describe<T>(VaultOperationResult<T> result)
     {
         return Describe(result.Error, result.Message);
+    }
+
+    private string DescribePasswordHealthSummary(bool isUnlocked)
+    {
+        if (!isUnlocked)
+        {
+            return "Unlock to check password health.";
+        }
+
+        if (!_passwordHealthReport.HasIssues)
+        {
+            return "No password warnings.";
+        }
+
+        var entryText = _passwordHealthReport.AffectedEntryCount == 1
+            ? "1 entry"
+            : $"{_passwordHealthReport.AffectedEntryCount} entries";
+        var warningText = _passwordHealthReport.Issues.Count == 1
+            ? "1 warning"
+            : $"{_passwordHealthReport.Issues.Count} warnings";
+        return $"{entryText} need review. {warningText}.";
+    }
+
+    private static string DescribePasswordHealthIssue(PasswordHealthIssue issue)
+    {
+        return issue.Kind switch
+        {
+            PasswordHealthIssueKind.WeakPassword => "Weak password: use a longer password with mixed character types.",
+            PasswordHealthIssueKind.ReusedPassword => issue.RelatedEntryCount <= 2
+                ? "Reused password: also used by another entry."
+                : $"Reused password: used by {issue.RelatedEntryCount} entries.",
+            PasswordHealthIssueKind.OldPassword => "Old password: consider rotating it.",
+            _ => "Password needs review."
+        };
     }
 
     private static string DescribeMasterPasswordChangeFailure(VaultOperationResult result)

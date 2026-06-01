@@ -22,6 +22,7 @@ public static class MauiProgram
         builder.Services.AddSingleton<IExternalVaultAnalyzer, DgNetExternalVaultAnalyzer>();
         builder.Services.AddSingleton<IVaultBackupService, FileSystemVaultBackupService>();
         builder.Services.AddSingleton<IPasswordGenerator, SecurePasswordGenerator>();
+        builder.Services.AddSingleton<IPasswordHealthAnalyzer, PasswordHealthAnalyzer>();
         builder.Services.AddSingleton<IVaultSession>(services =>
             new VaultSession(
                 services.GetRequiredService<IVaultService>(),
