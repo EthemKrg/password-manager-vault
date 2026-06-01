@@ -613,6 +613,7 @@ public partial class MainPage : ContentPage
         EntryCollection.SelectedItem = null;
         BackupCollection.SelectedItem = null;
         RestorePasswordEntry.Text = string.Empty;
+        ClearChangeMasterPasswordFields();
         _backupArtifacts.Clear();
         ClearEntryForm();
         RefreshEntries();
@@ -734,6 +735,82 @@ public partial class MainPage : ContentPage
         }
         finally
         {
+            EndOperation();
+        }
+    }
+
+    private async void OnChangeMasterPasswordClicked(object? sender, EventArgs e)
+    {
+        if (!TryBeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            if (_vaultSession.State != VaultSessionState.Unlocked)
+            {
+                SetFeedback("Unlock the vault before changing the master password.");
+                return;
+            }
+
+            if (_vaultSession.HasUnsavedChanges)
+            {
+                SetFeedback("Save or discard unsaved changes before changing the master password.");
+                return;
+            }
+
+            var currentMasterPassword = CurrentMasterPasswordEntry.Text ?? string.Empty;
+            var newMasterPassword = NewMasterPasswordEntry.Text ?? string.Empty;
+            var confirmNewMasterPassword = ConfirmNewMasterPasswordEntry.Text ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(currentMasterPassword)
+                || string.IsNullOrWhiteSpace(newMasterPassword)
+                || string.IsNullOrWhiteSpace(confirmNewMasterPassword))
+            {
+                SetFeedback("All master password fields are required.");
+                return;
+            }
+
+            if (!string.Equals(newMasterPassword, confirmNewMasterPassword, StringComparison.Ordinal))
+            {
+                SetFeedback("New master password confirmation does not match.");
+                return;
+            }
+
+            if (string.Equals(currentMasterPassword, newMasterPassword, StringComparison.Ordinal))
+            {
+                SetFeedback("New master password must be different.");
+                return;
+            }
+
+            var confirmed = await DisplayAlertAsync(
+                "Change master password",
+                "An encrypted backup will be created first, then the vault will be rewritten with the new master password.",
+                "Change",
+                "Cancel");
+            if (!confirmed)
+            {
+                SetFeedback("Master password change cancelled.");
+                return;
+            }
+
+            var result = await _vaultSession.ChangeMasterPasswordAsync(
+                currentMasterPassword,
+                newMasterPassword);
+            if (!result.Succeeded)
+            {
+                SetFeedback(DescribeMasterPasswordChangeFailure(result));
+                return;
+            }
+
+            HidePassword();
+            await ClearTrackedClipboardAsync(updateStatus: true);
+            await RefreshBackupArtifactsAsync(showFeedback: false);
+            SetFeedback("Master password changed. Use the new password next time.");
+        }
+        finally
+        {
+            ClearChangeMasterPasswordFields();
             EndOperation();
         }
     }
@@ -1162,6 +1239,7 @@ public partial class MainPage : ContentPage
         PrivacyDiscardAndLockButton.IsEnabled = isUnlocked && _vaultSession.HasUnsavedChanges;
         RefreshBackupsButton.IsEnabled = isUnlocked;
         RestoreBackupButton.IsEnabled = isUnlocked && !_vaultSession.HasUnsavedChanges && _selectedBackupArtifact is not null;
+        ChangeMasterPasswordButton.IsEnabled = isUnlocked && !_vaultSession.HasUnsavedChanges;
         EmptyListLabel.IsVisible = isUnlocked && _entries.Count == 0;
         EmptyBackupsLabel.IsVisible = isUnlocked && _backupArtifacts.Count == 0;
         AnalyzeExternalVaultButton.IsVisible = !isUnlocked && hasPendingOpen && !isLocked;
@@ -1172,6 +1250,7 @@ public partial class MainPage : ContentPage
         ApplyButtonState(SaveVaultButton, pressed: false, focused: SaveVaultButton.IsFocused, hovered: _hoveredButtons.Contains(SaveVaultButton));
         ApplyButtonState(RefreshBackupsButton, pressed: false, focused: RefreshBackupsButton.IsFocused, hovered: _hoveredButtons.Contains(RefreshBackupsButton));
         ApplyButtonState(RestoreBackupButton, pressed: false, focused: RestoreBackupButton.IsFocused, hovered: _hoveredButtons.Contains(RestoreBackupButton));
+        ApplyButtonState(ChangeMasterPasswordButton, pressed: false, focused: ChangeMasterPasswordButton.IsFocused, hovered: _hoveredButtons.Contains(ChangeMasterPasswordButton));
         ApplyButtonState(AnalyzeExternalVaultButton, pressed: false, focused: AnalyzeExternalVaultButton.IsFocused, hovered: _hoveredButtons.Contains(AnalyzeExternalVaultButton));
         ApplyButtonState(PrivacySaveAndLockButton, pressed: false, focused: PrivacySaveAndLockButton.IsFocused, hovered: _hoveredButtons.Contains(PrivacySaveAndLockButton));
         ApplyButtonState(PrivacyDiscardAndLockButton, pressed: false, focused: PrivacyDiscardAndLockButton.IsFocused, hovered: _hoveredButtons.Contains(PrivacyDiscardAndLockButton));
@@ -1210,6 +1289,13 @@ public partial class MainPage : ContentPage
     private void SetFeedback(string message)
     {
         FeedbackLabel.Text = message;
+    }
+
+    private void ClearChangeMasterPasswordFields()
+    {
+        CurrentMasterPasswordEntry.Text = string.Empty;
+        NewMasterPasswordEntry.Text = string.Empty;
+        ConfirmNewMasterPasswordEntry.Text = string.Empty;
     }
 
     private void SetInputFocusState(object? sender, bool focused)
@@ -1455,6 +1541,19 @@ public partial class MainPage : ContentPage
     private static string Describe<T>(VaultOperationResult<T> result)
     {
         return Describe(result.Error, result.Message);
+    }
+
+    private static string DescribeMasterPasswordChangeFailure(VaultOperationResult result)
+    {
+        return result.Error switch
+        {
+            VaultError.OpenFailed => "Current master password could not be verified.",
+            VaultError.InvalidMasterPassword => "New master password is invalid.",
+            VaultError.UnsavedChanges => "Save or discard unsaved changes before changing the master password.",
+            VaultError.BackupFailed => "Encrypted backup could not be created. Master password was not changed.",
+            VaultError.StaleVaultSnapshot => "Vault changed on disk. Reload before changing the master password.",
+            _ => Describe(result)
+        };
     }
 
     private static string Describe(VaultError error, string? message)

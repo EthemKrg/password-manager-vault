@@ -1,12 +1,14 @@
 using System.Text;
 using DgNet.Keepass;
 using PasswordManager.Core;
+using System.Security.Cryptography;
 
 namespace PasswordManager.Infrastructure.Tests;
 
 public sealed class DgNetVaultServiceTests
 {
     private const string MasterPassword = "correct horse battery staple - automated tests only";
+    private const string NewMasterPassword = "new correct horse battery staple - automated tests only";
     private const string WrongPassword = "wrong password - automated tests only";
     private const string AppVaultName = "Password Manager Vault";
     private const string AppVaultMarker = "PasswordManagerVault:v1";
@@ -278,6 +280,146 @@ public sealed class DgNetVaultServiceTests
 
         var loadedEntry = Assert.Single(loadWithOriginalPasswordResult.Value!.Entries);
         AssertEntryEqual(originalEntry, loadedEntry);
+    }
+
+    [Fact]
+    public async Task ChangeMasterPasswordAsync_ReencryptsVaultWithNewPasswordAndPreservesEntries()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        var entry = CreateEntry(serviceName: "GitHub", usernameOrEmail: "change@example.test");
+        var saveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(entry));
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var hashBeforeChange = await ComputeHashAsync(vaultPath);
+
+        var changeResult = await service.ChangeMasterPasswordAsync(
+            vaultPath,
+            MasterPassword,
+            NewMasterPassword,
+            loadResult.Value!);
+        var hashAfterChange = await ComputeHashAsync(vaultPath);
+        var loadWithOldPasswordResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var loadWithNewPasswordResult = await service.LoadAsync(vaultPath, NewMasterPassword);
+
+        Assert.True(saveResult.Succeeded);
+        Assert.True(loadResult.Succeeded);
+        Assert.True(changeResult.Succeeded);
+        Assert.NotEqual(hashBeforeChange, hashAfterChange);
+        Assert.False(loadWithOldPasswordResult.Succeeded);
+        Assert.Equal(VaultError.OpenFailed, loadWithOldPasswordResult.Error);
+        Assert.True(loadWithNewPasswordResult.Succeeded);
+        AssertEntryEqual(entry, Assert.Single(loadWithNewPasswordResult.Value!.Entries));
+        Assert.Empty(Directory.GetFiles(temp.Path, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task ChangeMasterPasswordAsync_WithWrongCurrentPasswordPreservesExistingVault()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        var entry = CreateEntry(serviceName: "Original", usernameOrEmail: "original@example.test");
+        var saveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(entry));
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var hashBeforeChange = await ComputeHashAsync(vaultPath);
+
+        var changeResult = await service.ChangeMasterPasswordAsync(
+            vaultPath,
+            WrongPassword,
+            NewMasterPassword,
+            loadResult.Value!);
+        var hashAfterChange = await ComputeHashAsync(vaultPath);
+        var loadWithOriginalPasswordResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var loadWithNewPasswordResult = await service.LoadAsync(vaultPath, NewMasterPassword);
+
+        Assert.True(saveResult.Succeeded);
+        Assert.True(loadResult.Succeeded);
+        Assert.False(changeResult.Succeeded);
+        Assert.Equal(VaultError.OpenFailed, changeResult.Error);
+        Assert.Equal(hashBeforeChange, hashAfterChange);
+        Assert.True(loadWithOriginalPasswordResult.Succeeded);
+        Assert.False(loadWithNewPasswordResult.Succeeded);
+        AssertEntryEqual(entry, Assert.Single(loadWithOriginalPasswordResult.Value!.Entries));
+        Assert.Empty(Directory.GetFiles(temp.Path, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task ChangeMasterPasswordAsync_RejectsStaleSnapshotAndPreservesCurrentVault()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        var originalEntry = CreateEntry(serviceName: "Original", usernameOrEmail: "original@example.test");
+        var initialSaveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(originalEntry));
+        var staleLoadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var currentLoadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var changedEntry = currentLoadResult.Value!.Entries.Single() with
+        {
+            Notes = "Changed before password update"
+        };
+        var externalSaveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            currentLoadResult.Value.Update(changedEntry));
+        var hashAfterExternalSave = await ComputeHashAsync(vaultPath);
+
+        var changeResult = await service.ChangeMasterPasswordAsync(
+            vaultPath,
+            MasterPassword,
+            NewMasterPassword,
+            staleLoadResult.Value!);
+        var loadWithOriginalPasswordResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var loadWithNewPasswordResult = await service.LoadAsync(vaultPath, NewMasterPassword);
+
+        Assert.True(initialSaveResult.Succeeded);
+        Assert.True(staleLoadResult.Succeeded);
+        Assert.True(currentLoadResult.Succeeded);
+        Assert.True(externalSaveResult.Succeeded);
+        Assert.False(changeResult.Succeeded);
+        Assert.Equal(VaultError.StaleVaultSnapshot, changeResult.Error);
+        Assert.Equal(hashAfterExternalSave, await ComputeHashAsync(vaultPath));
+        Assert.True(loadWithOriginalPasswordResult.Succeeded);
+        Assert.False(loadWithNewPasswordResult.Succeeded);
+        Assert.Equal("Changed before password update", Assert.Single(loadWithOriginalPasswordResult.Value!.Entries).Notes);
+        Assert.Empty(Directory.GetFiles(temp.Path, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task ChangeMasterPasswordAsync_RejectsExternalVaultsWithoutOverwriting()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        var unmanagedEntry = CreateEntry(serviceName: "External", usernameOrEmail: "external@example.test");
+        CreateUnmanagedVault(vaultPath, unmanagedEntry);
+        var hashBeforeChange = await ComputeHashAsync(vaultPath);
+
+        var changeResult = await service.ChangeMasterPasswordAsync(
+            vaultPath,
+            MasterPassword,
+            NewMasterPassword,
+            VaultSnapshot.Empty.Add(CreateEntry(serviceName: "Replacement")));
+        var hashAfterChange = await ComputeHashAsync(vaultPath);
+
+        Assert.False(changeResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFormat, changeResult.Error);
+        Assert.Equal(hashBeforeChange, hashAfterChange);
+
+        using var database = Database.Open(vaultPath, MasterPassword);
+        var preservedEntry = Assert.Single(database.RootGroup.Entries);
+        Assert.Equal(unmanagedEntry.ServiceName, preservedEntry.Title);
+        Assert.Equal(unmanagedEntry.UsernameOrEmail, preservedEntry.UserName);
+        Assert.Empty(Directory.GetFiles(temp.Path, "*.tmp"));
     }
 
     [Fact]
@@ -561,5 +703,12 @@ public sealed class DgNetVaultServiceTests
         using var database = Database.Open(vaultPath, MasterPassword);
         database.RootGroup.AddGroup(new Group { Name = "Unsupported nested group" });
         database.Save();
+    }
+
+    private static async Task<string> ComputeHashAsync(string path)
+    {
+        await using var stream = File.OpenRead(path);
+        var hash = await SHA256.HashDataAsync(stream);
+        return Convert.ToHexString(hash);
     }
 }
