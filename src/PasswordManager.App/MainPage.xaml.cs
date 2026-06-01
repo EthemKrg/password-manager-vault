@@ -15,6 +15,7 @@ public partial class MainPage : ContentPage
     private readonly IExternalVaultAnalyzer _externalVaultAnalyzer;
     private readonly IVaultFilePicker _filePicker;
     private readonly IClipboardService _clipboardService;
+    private readonly IPasswordGenerator _passwordGenerator;
     private readonly ObservableCollection<AccountEntry> _entries = [];
     private readonly ObservableCollection<BackupArtifactViewModel> _backupArtifacts = [];
     private readonly ObservableCollection<ExternalPreviewViewModel> _externalPreviewEntries = [];
@@ -35,13 +36,15 @@ public partial class MainPage : ContentPage
         IVaultSession vaultSession,
         IExternalVaultAnalyzer externalVaultAnalyzer,
         IVaultFilePicker filePicker,
-        IClipboardService clipboardService)
+        IClipboardService clipboardService,
+        IPasswordGenerator passwordGenerator)
     {
         InitializeComponent();
         _vaultSession = vaultSession;
         _externalVaultAnalyzer = externalVaultAnalyzer;
         _filePicker = filePicker;
         _clipboardService = clipboardService;
+        _passwordGenerator = passwordGenerator;
         EntryCollection.ItemsSource = _entries;
         BackupCollection.ItemsSource = _backupArtifacts;
         ExternalPreviewCollection.ItemsSource = _externalPreviewEntries;
@@ -305,6 +308,48 @@ public partial class MainPage : ContentPage
     private async void OnCopyPasswordClicked(object? sender, EventArgs e)
     {
         await CopySensitiveTextAsync(PasswordEntry.Text, "Password");
+    }
+
+    private void OnGeneratePasswordClicked(object? sender, EventArgs e)
+    {
+        if (!TryBeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            if (_vaultSession.State != VaultSessionState.Unlocked)
+            {
+                SetFeedback("Unlock a vault before generating an entry password.");
+                return;
+            }
+
+            if (!int.TryParse(GeneratorLengthEntry.Text, out var length))
+            {
+                SetFeedback("Password length must be a number.");
+                return;
+            }
+
+            var options = new PasswordGeneratorOptions(
+                length,
+                GeneratorUppercaseCheckBox.IsChecked,
+                GeneratorLowercaseCheckBox.IsChecked,
+                GeneratorDigitsCheckBox.IsChecked,
+                GeneratorSymbolsCheckBox.IsChecked);
+
+            HidePassword();
+            PasswordEntry.Text = _passwordGenerator.Generate(options);
+            SetFeedback("Password generated in memory. Save the entry to persist changes.");
+        }
+        catch (ArgumentException ex)
+        {
+            SetFeedback(ex.Message);
+        }
+        finally
+        {
+            EndOperation();
+        }
     }
 
     private void OnSaveEntryClicked(object? sender, EventArgs e)
@@ -1251,6 +1296,8 @@ public partial class MainPage : ContentPage
         ApplyButtonState(RefreshBackupsButton, pressed: false, focused: RefreshBackupsButton.IsFocused, hovered: _hoveredButtons.Contains(RefreshBackupsButton));
         ApplyButtonState(RestoreBackupButton, pressed: false, focused: RestoreBackupButton.IsFocused, hovered: _hoveredButtons.Contains(RestoreBackupButton));
         ApplyButtonState(ChangeMasterPasswordButton, pressed: false, focused: ChangeMasterPasswordButton.IsFocused, hovered: _hoveredButtons.Contains(ChangeMasterPasswordButton));
+        GeneratePasswordButton.IsEnabled = isUnlocked;
+        ApplyButtonState(GeneratePasswordButton, pressed: false, focused: GeneratePasswordButton.IsFocused, hovered: _hoveredButtons.Contains(GeneratePasswordButton));
         ApplyButtonState(AnalyzeExternalVaultButton, pressed: false, focused: AnalyzeExternalVaultButton.IsFocused, hovered: _hoveredButtons.Contains(AnalyzeExternalVaultButton));
         ApplyButtonState(PrivacySaveAndLockButton, pressed: false, focused: PrivacySaveAndLockButton.IsFocused, hovered: _hoveredButtons.Contains(PrivacySaveAndLockButton));
         ApplyButtonState(PrivacyDiscardAndLockButton, pressed: false, focused: PrivacyDiscardAndLockButton.IsFocused, hovered: _hoveredButtons.Contains(PrivacyDiscardAndLockButton));
