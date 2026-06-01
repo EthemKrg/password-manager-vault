@@ -22,8 +22,13 @@ public sealed class DgNetVaultService : IVaultService
         {
             EnsureParentDirectory(vaultPath);
 
+            if (File.Exists(vaultPath))
+            {
+                return VaultOperationResult.Failure(VaultError.FileAlreadyExists);
+            }
+
             using var database = Database.Create(masterPassword);
-            await database.SaveAsAsync(vaultPath, cancellationToken);
+            await SaveDatabaseReplacingTargetAsync(database, vaultPath, cancellationToken);
 
             return VaultOperationResult.Success();
         }
@@ -95,7 +100,7 @@ public sealed class DgNetVaultService : IVaultService
                 database.RootGroup.AddEntry(MapEntry(account));
             }
 
-            await database.SaveAsAsync(vaultPath, cancellationToken);
+            await SaveDatabaseReplacingTargetAsync(database, vaultPath, cancellationToken);
             return VaultOperationResult.Success();
         }
         catch (Exception ex)
@@ -184,6 +189,37 @@ public sealed class DgNetVaultService : IVaultService
         if (!string.IsNullOrWhiteSpace(parentDirectory))
         {
             Directory.CreateDirectory(parentDirectory);
+        }
+    }
+
+    private static async Task SaveDatabaseReplacingTargetAsync(
+        Database database,
+        string vaultPath,
+        CancellationToken cancellationToken)
+    {
+        var fullVaultPath = Path.GetFullPath(vaultPath);
+        var parentDirectory = Path.GetDirectoryName(fullVaultPath) ?? Directory.GetCurrentDirectory();
+        var temporaryPath = Path.Combine(parentDirectory, $".{Path.GetFileName(fullVaultPath)}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            await database.SaveAsAsync(temporaryPath, cancellationToken);
+
+            if (File.Exists(fullVaultPath))
+            {
+                File.Replace(temporaryPath, fullVaultPath, null);
+            }
+            else
+            {
+                File.Move(temporaryPath, fullVaultPath);
+            }
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
         }
     }
 }

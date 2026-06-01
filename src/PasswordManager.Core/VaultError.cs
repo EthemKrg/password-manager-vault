@@ -6,6 +6,7 @@ public enum VaultError
     InvalidVaultPath,
     InvalidMasterPassword,
     FileNotFound,
+    FileAlreadyExists,
     OpenFailed,
     SaveFailed,
     Unknown
