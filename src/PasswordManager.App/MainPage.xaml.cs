@@ -9,6 +9,11 @@ public partial class MainPage : ContentPage
     private static readonly TimeSpan ClipboardClearDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PasswordRevealDelay = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan AutoLockDelay = TimeSpan.FromMinutes(5);
+    private const uint MotionFastDuration = 120;
+    private const uint MotionStandardDuration = 180;
+    private const uint MotionEntranceDuration = 220;
+    private const double MotionOffset = 10;
+    private const double MotionSubtleScale = 0.985;
     private const int ExternalPreviewLimit = 25;
 
     private readonly IVaultSession _vaultSession;
@@ -30,6 +35,8 @@ public partial class MainPage : ContentPage
     private CancellationTokenSource? _autoLockCancellation;
     private readonly HashSet<Button> _hoveredButtons = [];
     private bool _hasExternalAnalysis;
+    private Guid? _lastRenderedEntryId;
+    private bool _lastRenderedDetailWasNew = true;
     private bool _isPrivacyMaskActive;
     private bool _isUpdatingRevealState;
     private bool _isBusy;
@@ -167,6 +174,7 @@ public partial class MainPage : ContentPage
             ClearEntryForm();
             RefreshEntries();
             await RefreshBackupArtifactsAsync(showFeedback: false);
+            StartDashboardEntranceMotion();
             SetFeedback("Vault created and unlocked.");
         }
         finally
@@ -502,6 +510,7 @@ public partial class MainPage : ContentPage
             _pendingVaultPath = null;
             RefreshEntries();
             await RefreshBackupArtifactsAsync(showFeedback: false);
+            StartDashboardEntranceMotion();
             SetFeedback("Vault unlocked.");
         }
         finally
@@ -700,6 +709,7 @@ public partial class MainPage : ContentPage
         PrivacyMaskTitleLabel.Text = "Vault protected";
         PrivacyMaskMessageLabel.Text = message;
         UpdateUi();
+        StartPrivacyMaskMotion();
     }
 
     private void DeactivatePrivacyMask()
@@ -852,6 +862,7 @@ public partial class MainPage : ContentPage
             ClearEntryForm();
             RefreshEntries();
             await RefreshBackupArtifactsAsync(showFeedback: false);
+            StartDashboardEntranceMotion();
             SetFeedback("Vault restored from encrypted backup.");
         }
         finally
@@ -977,7 +988,7 @@ public partial class MainPage : ContentPage
 
         _trackedClipboardText = copiedText;
         _clipboardCountdownCancellation = new CancellationTokenSource();
-        ClipboardStatusLabel.IsVisible = true;
+        SetClipboardStatus($"Clipboard clears in {(int)ClipboardClearDelay.TotalSeconds}s");
         _ = RunClipboardCountdownAsync(copiedText, _clipboardCountdownCancellation.Token);
     }
 
@@ -1025,16 +1036,14 @@ public partial class MainPage : ContentPage
             var cleared = await _clipboardService.ClearIfCurrentAsync(trackedText);
             if (updateStatus)
             {
-                ClipboardStatusLabel.IsVisible = true;
-                ClipboardStatusLabel.Text = cleared ? "Clipboard cleared." : "Clipboard changed; auto-clear cancelled.";
+                SetClipboardStatus(cleared ? "Clipboard cleared." : "Clipboard changed; auto-clear cancelled.");
             }
         }
         catch (Exception)
         {
             if (updateStatus)
             {
-                ClipboardStatusLabel.IsVisible = true;
-                ClipboardStatusLabel.Text = "Clipboard auto-clear failed.";
+                SetClipboardStatus("Clipboard auto-clear failed.");
             }
         }
     }
@@ -1054,8 +1063,7 @@ public partial class MainPage : ContentPage
     private void ClearClipboardTracking(string status)
     {
         CancelClipboardCountdown(clearTrackedText: true);
-        ClipboardStatusLabel.IsVisible = true;
-        ClipboardStatusLabel.Text = status;
+        SetClipboardStatus(status);
     }
 
     private void StartPasswordRevealAutoHide()
@@ -1319,6 +1327,9 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        var shouldAnimate = _lastRenderedDetailWasNew || _lastRenderedEntryId != _selectedEntry.Id;
+        _lastRenderedEntryId = _selectedEntry.Id;
+        _lastRenderedDetailWasNew = false;
         HidePassword();
         DetailTitleLabel.Text = _selectedEntry.ServiceName;
         DetailUsernameLabel.Text = _selectedEntry.UsernameOrEmail.Length == 0
@@ -1335,10 +1346,17 @@ public partial class MainPage : ContentPage
         DeleteEntryButton.IsEnabled = true;
         RenderPasswordHealthForSelectedEntry();
         ApplyButtonState(DeleteEntryButton, pressed: false, focused: DeleteEntryButton.IsFocused, hovered: _hoveredButtons.Contains(DeleteEntryButton));
+        if (shouldAnimate)
+        {
+            StartDetailMotion();
+        }
     }
 
     private void ClearEntryForm()
     {
+        var shouldAnimate = !_lastRenderedDetailWasNew || _lastRenderedEntryId is not null;
+        _lastRenderedEntryId = null;
+        _lastRenderedDetailWasNew = true;
         HidePassword();
         DetailTitleLabel.Text = "New entry";
         DetailUsernameLabel.Text = "Fill the required fields, then add or update.";
@@ -1354,6 +1372,10 @@ public partial class MainPage : ContentPage
         PasswordHealthPanel.IsVisible = false;
         PasswordHealthDetailLabel.Text = string.Empty;
         ApplyButtonState(DeleteEntryButton, pressed: false, focused: DeleteEntryButton.IsFocused, hovered: _hoveredButtons.Contains(DeleteEntryButton));
+        if (shouldAnimate)
+        {
+            StartDetailMotion();
+        }
     }
 
     private void RenderPasswordHealthForSelectedEntry()
@@ -1452,6 +1474,105 @@ public partial class MainPage : ContentPage
     private void SetFeedback(string message)
     {
         FeedbackLabel.Text = message;
+    }
+
+    private void SetClipboardStatus(string message)
+    {
+        ClipboardStatusLabel.IsVisible = true;
+        ClipboardStatusLabel.Text = message;
+        RunMotion(AnimateClipboardStatusAsync);
+    }
+
+    private void StartDashboardEntranceMotion()
+    {
+        RunMotion(AnimateDashboardEntranceAsync);
+    }
+
+    private void StartDetailMotion()
+    {
+        RunMotion(AnimateDetailPanelAsync);
+    }
+
+    private void StartPrivacyMaskMotion()
+    {
+        RunMotion(AnimatePrivacyMaskAsync);
+    }
+
+    private void RunMotion(Func<Task> animation)
+    {
+        _ = RunMotionSafelyAsync(animation);
+    }
+
+    private static async Task RunMotionSafelyAsync(Func<Task> animation)
+    {
+        try
+        {
+            await animation();
+        }
+        catch (Exception)
+        {
+            // Motion is cosmetic; vault/session behavior must not depend on it.
+        }
+    }
+
+    private async Task AnimateDashboardEntranceAsync()
+    {
+        if (!DashboardPanel.IsVisible)
+        {
+            return;
+        }
+
+        DashboardPanel.CancelAnimations();
+        DashboardPanel.Opacity = 0;
+        DashboardPanel.TranslationY = MotionOffset;
+
+        await Task.WhenAll(
+            DashboardPanel.FadeToAsync(1, MotionEntranceDuration, Easing.CubicOut),
+            DashboardPanel.TranslateToAsync(0, 0, MotionEntranceDuration, Easing.CubicOut));
+    }
+
+    private async Task AnimateDetailPanelAsync()
+    {
+        if (!DashboardPanel.IsVisible || _isPrivacyMaskActive)
+        {
+            return;
+        }
+
+        DetailPanel.CancelAnimations();
+        DetailPanel.Opacity = 0;
+        DetailPanel.TranslationY = MotionOffset;
+
+        await Task.WhenAll(
+            DetailPanel.FadeToAsync(1, MotionStandardDuration, Easing.CubicOut),
+            DetailPanel.TranslateToAsync(0, 0, MotionStandardDuration, Easing.CubicOut));
+    }
+
+    private async Task AnimateClipboardStatusAsync()
+    {
+        if (!ClipboardStatusLabel.IsVisible)
+        {
+            return;
+        }
+
+        ClipboardStatusLabel.CancelAnimations();
+        ClipboardStatusLabel.Opacity = 0.65;
+        await ClipboardStatusLabel.FadeToAsync(1, MotionFastDuration, Easing.CubicOut);
+    }
+
+    private async Task AnimatePrivacyMaskAsync()
+    {
+        if (!PrivacyMaskPanel.IsVisible)
+        {
+            return;
+        }
+
+        PrivacyMaskPanel.CancelAnimations();
+        PrivacyMaskPanel.Opacity = 0;
+        PrivacyMaskPanel.Scale = MotionSubtleScale;
+
+        await Task.WhenAll(
+            PrivacyMaskPanel.FadeToAsync(1, MotionStandardDuration, Easing.CubicOut),
+            PrivacyMaskPanel.ScaleToAsync(1, MotionStandardDuration, Easing.CubicOut));
     }
 
     private void ClearChangeMasterPasswordFields()
