@@ -12,9 +12,17 @@ public partial class App : Application
 
     protected override Window CreateWindow(IActivationState? activationState)
     {
-        return new Window(_mainPage)
+        var window = new Window(_mainPage)
         {
             Title = "Password Manager Vault"
         };
+
+        window.Activated += (_, _) => _mainPage.HandleWindowActivated();
+        window.Resumed += (_, _) => _mainPage.HandleWindowActivated();
+        window.Deactivated += async (_, _) => await _mainPage.HandleWindowDeactivatedAsync();
+        window.Stopped += async (_, _) => await _mainPage.HandleWindowStoppedAsync();
+        window.Destroying += async (_, _) => await _mainPage.HandleWindowDestroyingAsync();
+
+        return window;
     }
 }

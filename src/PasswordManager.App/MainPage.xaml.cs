@@ -8,6 +8,7 @@ public partial class MainPage : ContentPage
 {
     private static readonly TimeSpan ClipboardClearDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PasswordRevealDelay = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan AutoLockDelay = TimeSpan.FromMinutes(5);
     private const int ExternalPreviewLimit = 25;
 
     private readonly IVaultSession _vaultSession;
@@ -23,8 +24,10 @@ public partial class MainPage : ContentPage
     private string? _trackedClipboardText;
     private CancellationTokenSource? _clipboardCountdownCancellation;
     private CancellationTokenSource? _passwordRevealCancellation;
+    private CancellationTokenSource? _autoLockCancellation;
     private readonly HashSet<Button> _hoveredButtons = [];
     private bool _hasExternalAnalysis;
+    private bool _isPrivacyMaskActive;
     private bool _isUpdatingRevealState;
     private bool _isBusy;
 
@@ -43,6 +46,7 @@ public partial class MainPage : ContentPage
         BackupCollection.ItemsSource = _backupArtifacts;
         ExternalPreviewCollection.ItemsSource = _externalPreviewEntries;
         AttachButtonHoverHandlers(this);
+        AttachInputActivityHandlers(this);
         UpdateUi();
     }
 
@@ -51,6 +55,31 @@ public partial class MainPage : ContentPage
         HidePassword();
         _ = ClearTrackedClipboardAsync(updateStatus: false);
         base.OnDisappearing();
+    }
+
+    public void HandleWindowActivated()
+    {
+        RecordUserActivity();
+    }
+
+    public Task HandleWindowDeactivatedAsync()
+    {
+        HidePassword();
+        return Task.CompletedTask;
+    }
+
+    public async Task HandleWindowStoppedAsync()
+    {
+        await ProtectUnlockedSessionAsync(
+            cleanLockFeedback: "Vault locked while the app was in the background.",
+            dirtyMaskFeedback: "Vault has unsaved changes. Sensitive content is masked until you save or discard.");
+    }
+
+    public async Task HandleWindowDestroyingAsync()
+    {
+        CancelAutoLockCountdown();
+        HidePassword();
+        await ClearTrackedClipboardAsync(updateStatus: false);
     }
 
     private async void OnCreateVaultClicked(object? sender, EventArgs e)
@@ -175,13 +204,25 @@ public partial class MainPage : ContentPage
         await LockOrCloseAsync(close: true);
     }
 
+    private async void OnPrivacySaveAndLockClicked(object? sender, EventArgs e)
+    {
+        await SaveAndLockMaskedSessionAsync();
+    }
+
+    private async void OnPrivacyDiscardAndLockClicked(object? sender, EventArgs e)
+    {
+        await DiscardAndLockMaskedSessionAsync();
+    }
+
     private void OnSearchTextChanged(object? sender, TextChangedEventArgs e)
     {
+        RecordUserActivity();
         RefreshEntries();
     }
 
     private void OnInputFocused(object? sender, FocusEventArgs e)
     {
+        RecordUserActivity();
         SetInputFocusState(sender, focused: true);
     }
 
@@ -224,6 +265,7 @@ public partial class MainPage : ContentPage
 
     private void OnEntrySelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
+        RecordUserActivity();
         _selectedEntry = e.CurrentSelection.FirstOrDefault() as AccountEntry;
         RenderSelectedEntry();
     }
@@ -244,6 +286,7 @@ public partial class MainPage : ContentPage
         }
 
         PasswordEntry.IsPassword = !e.Value;
+        RecordUserActivity();
         if (e.Value)
         {
             StartPasswordRevealAutoHide();
@@ -442,22 +485,137 @@ public partial class MainPage : ContentPage
 
             HidePassword();
             await ClearTrackedClipboardAsync(updateStatus: true);
-            _pendingVaultPath = null;
-            _selectedEntry = null;
-            _selectedBackupArtifact = null;
-            ClearExternalAnalysis();
-            EntryCollection.SelectedItem = null;
-            BackupCollection.SelectedItem = null;
-            RestorePasswordEntry.Text = string.Empty;
-            _backupArtifacts.Clear();
-            ClearEntryForm();
-            RefreshEntries();
+            ClearUnlockedUiState();
             SetFeedback(close ? "Vault closed." : "Vault locked.");
         }
         finally
         {
             EndOperation();
         }
+    }
+
+    private async Task ProtectUnlockedSessionAsync(string cleanLockFeedback, string dirtyMaskFeedback)
+    {
+        if (_vaultSession.State != VaultSessionState.Unlocked)
+        {
+            return;
+        }
+
+        HidePassword();
+        await ClearTrackedClipboardAsync(updateStatus: false);
+        RestorePasswordEntry.Text = string.Empty;
+
+        if (_isBusy)
+        {
+            return;
+        }
+
+        if (_vaultSession.HasUnsavedChanges)
+        {
+            ActivatePrivacyMask(dirtyMaskFeedback);
+            return;
+        }
+
+        var result = _vaultSession.Lock();
+        if (!result.Succeeded)
+        {
+            ActivatePrivacyMask(Describe(result));
+            return;
+        }
+
+        ClearUnlockedUiState();
+        SetFeedback(cleanLockFeedback);
+    }
+
+    private async Task SaveAndLockMaskedSessionAsync()
+    {
+        if (!TryBeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            var saveSucceeded = await SaveVaultAsync();
+            if (!saveSucceeded)
+            {
+                ActivatePrivacyMask("Save failed. Sensitive content remains masked until you save or discard.");
+                return;
+            }
+
+            var result = _vaultSession.Lock();
+            if (!result.Succeeded)
+            {
+                ActivatePrivacyMask(Describe(result));
+                return;
+            }
+
+            DeactivatePrivacyMask();
+            await ClearTrackedClipboardAsync(updateStatus: true);
+            ClearUnlockedUiState();
+            SetFeedback("Vault saved and locked.");
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    private async Task DiscardAndLockMaskedSessionAsync()
+    {
+        if (!TryBeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            var result = _vaultSession.Lock(discardUnsavedChanges: true);
+            if (!result.Succeeded)
+            {
+                ActivatePrivacyMask(Describe(result));
+                return;
+            }
+
+            DeactivatePrivacyMask();
+            await ClearTrackedClipboardAsync(updateStatus: true);
+            ClearUnlockedUiState();
+            SetFeedback("Unsaved changes discarded. Vault locked.");
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    private void ActivatePrivacyMask(string message)
+    {
+        _isPrivacyMaskActive = true;
+        PrivacyMaskTitleLabel.Text = "Vault protected";
+        PrivacyMaskMessageLabel.Text = message;
+        UpdateUi();
+    }
+
+    private void DeactivatePrivacyMask()
+    {
+        _isPrivacyMaskActive = false;
+        PrivacyMaskMessageLabel.Text = string.Empty;
+    }
+
+    private void ClearUnlockedUiState()
+    {
+        CancelAutoLockCountdown();
+        DeactivatePrivacyMask();
+        _pendingVaultPath = null;
+        _selectedEntry = null;
+        _selectedBackupArtifact = null;
+        ClearExternalAnalysis();
+        EntryCollection.SelectedItem = null;
+        BackupCollection.SelectedItem = null;
+        RestorePasswordEntry.Text = string.Empty;
+        _backupArtifacts.Clear();
+        ClearEntryForm();
+        RefreshEntries();
     }
 
     private async Task<PendingChangeChoice> ResolvePendingChangesAsync()
@@ -524,6 +682,7 @@ public partial class MainPage : ContentPage
 
     private void OnBackupSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
+        RecordUserActivity();
         _selectedBackupArtifact = e.CurrentSelection.FirstOrDefault() as BackupArtifactViewModel;
         UpdateUi();
     }
@@ -995,9 +1154,12 @@ public partial class MainPage : ContentPage
 
         StartPanel.IsVisible = !isUnlocked && !isLocked && !hasPendingOpen;
         UnlockPanel.IsVisible = !isUnlocked && (isLocked || hasPendingOpen);
-        DashboardPanel.IsVisible = isUnlocked;
+        DashboardPanel.IsVisible = isUnlocked && !_isPrivacyMaskActive;
+        PrivacyMaskPanel.IsVisible = _isPrivacyMaskActive;
         UnsavedBadge.IsVisible = _vaultSession.HasUnsavedChanges;
         SaveVaultButton.IsEnabled = _vaultSession.HasUnsavedChanges;
+        PrivacySaveAndLockButton.IsEnabled = isUnlocked && _vaultSession.HasUnsavedChanges;
+        PrivacyDiscardAndLockButton.IsEnabled = isUnlocked && _vaultSession.HasUnsavedChanges;
         RefreshBackupsButton.IsEnabled = isUnlocked;
         RestoreBackupButton.IsEnabled = isUnlocked && !_vaultSession.HasUnsavedChanges && _selectedBackupArtifact is not null;
         EmptyListLabel.IsVisible = isUnlocked && _entries.Count == 0;
@@ -1011,6 +1173,8 @@ public partial class MainPage : ContentPage
         ApplyButtonState(RefreshBackupsButton, pressed: false, focused: RefreshBackupsButton.IsFocused, hovered: _hoveredButtons.Contains(RefreshBackupsButton));
         ApplyButtonState(RestoreBackupButton, pressed: false, focused: RestoreBackupButton.IsFocused, hovered: _hoveredButtons.Contains(RestoreBackupButton));
         ApplyButtonState(AnalyzeExternalVaultButton, pressed: false, focused: AnalyzeExternalVaultButton.IsFocused, hovered: _hoveredButtons.Contains(AnalyzeExternalVaultButton));
+        ApplyButtonState(PrivacySaveAndLockButton, pressed: false, focused: PrivacySaveAndLockButton.IsFocused, hovered: _hoveredButtons.Contains(PrivacySaveAndLockButton));
+        ApplyButtonState(PrivacyDiscardAndLockButton, pressed: false, focused: PrivacyDiscardAndLockButton.IsFocused, hovered: _hoveredButtons.Contains(PrivacyDiscardAndLockButton));
         ApplyButtonState(DeleteEntryButton, pressed: false, focused: DeleteEntryButton.IsFocused, hovered: _hoveredButtons.Contains(DeleteEntryButton));
 
         StatusBadge.Text = _vaultSession.State switch
@@ -1039,6 +1203,7 @@ public partial class MainPage : ContentPage
     private void EndOperation()
     {
         _isBusy = false;
+        RecordUserActivity();
         UpdateUi();
     }
 
@@ -1064,6 +1229,45 @@ public partial class MainPage : ContentPage
         return Application.Current?.Resources.TryGetValue(key, out var value) == true && value is Color color
             ? color
             : fallback;
+    }
+
+    private void RecordUserActivity()
+    {
+        if (_vaultSession.State != VaultSessionState.Unlocked || _isPrivacyMaskActive)
+        {
+            return;
+        }
+
+        RestartAutoLockCountdown();
+    }
+
+    private void RestartAutoLockCountdown()
+    {
+        CancelAutoLockCountdown();
+        _autoLockCancellation = new CancellationTokenSource();
+        _ = RunAutoLockCountdownAsync(_autoLockCancellation.Token);
+    }
+
+    private async Task RunAutoLockCountdownAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(AutoLockDelay, cancellationToken);
+            await MainThread.InvokeOnMainThreadAsync(() =>
+                ProtectUnlockedSessionAsync(
+                    cleanLockFeedback: "Vault locked after inactivity.",
+                    dirtyMaskFeedback: "Vault has unsaved changes. Sensitive content is masked until you save or discard."));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void CancelAutoLockCountdown()
+    {
+        _autoLockCancellation?.Cancel();
+        _autoLockCancellation?.Dispose();
+        _autoLockCancellation = null;
     }
 
     private static bool IsExternalVaultFailure(VaultError error)
@@ -1119,6 +1323,30 @@ public partial class MainPage : ContentPage
             ExternalVaultIssueKind.UnsupportedFormatOrKdf => "format/KDF",
             _ => "unsupported data"
         };
+    }
+
+    private void AttachInputActivityHandlers(IVisualTreeElement element)
+    {
+        foreach (var child in element.GetVisualChildren())
+        {
+            switch (child)
+            {
+                case Entry entry:
+                    entry.TextChanged += (_, _) => RecordUserActivity();
+                    break;
+                case Editor editor:
+                    editor.TextChanged += (_, _) => RecordUserActivity();
+                    break;
+                case CheckBox checkBox:
+                    checkBox.CheckedChanged += (_, _) => RecordUserActivity();
+                    break;
+            }
+
+            if (child is IVisualTreeElement visualChild)
+            {
+                AttachInputActivityHandlers(visualChild);
+            }
+        }
     }
 
     private void AttachButtonHoverHandlers(IVisualTreeElement element)
