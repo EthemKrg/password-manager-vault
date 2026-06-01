@@ -54,6 +54,64 @@ public sealed class VaultSnapshotTests
         Assert.Equal(["Bank", "GitHub", "Mail"], emptyResults.Select(entry => entry.ServiceName).ToArray());
     }
 
+    [Fact]
+    public void Constructors_DefensivelyCopyMutableLists()
+    {
+        var tags = new List<string> { "source" };
+        var entry = CreateEntry("GitHub", "dev@example.test", tags);
+        tags.Add("mutated");
+
+        var entries = new List<AccountEntry> { entry };
+        var snapshot = new VaultSnapshot(entries);
+        entries.Clear();
+
+        Assert.Equal(["source"], entry.Tags);
+        Assert.Equal(entry.Id, Assert.Single(snapshot.Entries).Id);
+    }
+
+    [Fact]
+    public void Constructors_RejectInvalidRequiredFieldsAndTags()
+    {
+        Assert.Throws<ArgumentException>(() => new AccountEntryDraft(
+            " ",
+            "https://example.test",
+            "user@example.test",
+            "password",
+            "",
+            []));
+        Assert.Throws<ArgumentException>(() => new AccountEntryDraft(
+            "Example",
+            "https://example.test",
+            "user@example.test",
+            " ",
+            "",
+            []));
+        Assert.Throws<ArgumentException>(() => new AccountEntryDraft(
+            "Example",
+            "",
+            "",
+            "password",
+            "",
+            ["valid", "bad;tag"]));
+        Assert.Throws<ArgumentException>(() => new AccountEntryDraft(
+            "Example",
+            "",
+            "",
+            "password",
+            "",
+            new List<string?> { "valid", null! }!));
+    }
+
+    [Fact]
+    public void SearchQuery_NormalizesNullsAndRejectsDelimitedTags()
+    {
+        var query = new VaultSearchQuery(null, null);
+
+        Assert.Equal(string.Empty, query.Text);
+        Assert.Empty(query.Tags);
+        Assert.Throws<ArgumentException>(() => new VaultSearchQuery("test", ["bad;tag"]));
+    }
+
     private static AccountEntry CreateEntry(string serviceName, string usernameOrEmail, IReadOnlyList<string> tags)
     {
         return DgNetVaultService.CreateEntry(new AccountEntryDraft(
