@@ -285,11 +285,25 @@
                                    Placeholder="Service name" />
                             <Entry x:Name="WebsiteUrlEntry"
                                    Placeholder="Website URL" />
-                            <Entry x:Name="UsernameEntry"
-                                   Placeholder="Username or email" />
-                            <Entry x:Name="PasswordEntry"
-                                   Placeholder="Password"
-                                   IsPassword="True" />
+                            <Grid ColumnDefinitions="*,Auto"
+                                  ColumnSpacing="10">
+                                <Entry x:Name="UsernameEntry"
+                                       Placeholder="Username or email" />
+                                <Button Grid.Column="1"
+                                        Text="Copy username"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Clicked="OnCopyUsernameClicked" />
+                            </Grid>
+                            <Grid ColumnDefinitions="*,Auto"
+                                  ColumnSpacing="10">
+                                <Entry x:Name="PasswordEntry"
+                                       Placeholder="Password"
+                                       IsPassword="True" />
+                                <Button Grid.Column="1"
+                                        Text="Copy password"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Clicked="OnCopyPasswordClicked" />
+                            </Grid>
                             <HorizontalStackLayout Spacing="16">
                                 <CheckBox x:Name="RevealPasswordCheckBox"
                                           CheckedChanged="OnRevealPasswordChanged" />
@@ -301,6 +315,10 @@
                                        VerticalOptions="Center"
                                        TextColor="#20231F" />
                             </HorizontalStackLayout>
+                            <Label x:Name="ClipboardStatusLabel"
+                                   FontSize="12"
+                                   TextColor="#596157"
+                                   IsVisible="False" />
                             <Editor x:Name="NotesEditor"
                                     Placeholder="Notes"
                                     HeightRequest="96"

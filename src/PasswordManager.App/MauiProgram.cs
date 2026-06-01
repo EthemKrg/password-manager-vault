@@ -22,6 +22,7 @@ public static class MauiProgram
         builder.Services.AddSingleton<IVaultSession>(services =>
             new VaultSession(services.GetRequiredService<IVaultService>()));
         builder.Services.AddSingleton<IVaultFilePicker, WindowsVaultFilePicker>();
+        builder.Services.AddSingleton<IClipboardService, MauiClipboardService>();
         builder.Services.AddSingleton<MainPage>();
 
 #if DEBUG
