@@ -6,6 +6,16 @@ namespace PasswordManager.Infrastructure;
 public sealed class DgNetVaultService : IVaultService
 {
     private const char TagSeparator = ';';
+    private const string AppVaultName = "Password Manager Vault";
+    private const string AppVaultMarker = "PasswordManagerVault:v1";
+    private static readonly HashSet<string> StandardEntryStringKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Title",
+        "UserName",
+        "Password",
+        "URL",
+        "Notes"
+    };
 
     public async Task<VaultOperationResult> CreateAsync(
         string vaultPath,
@@ -28,6 +38,7 @@ public sealed class DgNetVaultService : IVaultService
             }
 
             using var database = Database.Create(masterPassword);
+            MarkAsAppManaged(database);
             await SaveDatabaseReplacingTargetAsync(database, vaultPath, cancellationToken);
 
             return VaultOperationResult.Success();
@@ -58,6 +69,12 @@ public sealed class DgNetVaultService : IVaultService
         {
             using var database = new Database(vaultPath, masterPassword);
             await database.OpenAsync(cancellationToken);
+
+            var supportResult = ValidateAppManagedDatabase(database);
+            if (supportResult is not null)
+            {
+                return VaultOperationResult<VaultSnapshot>.Failure(supportResult.Error, supportResult.Message);
+            }
 
             var entries = database.RootGroup
                 .FindAllEntries(_ => true)
@@ -94,7 +111,21 @@ public sealed class DgNetVaultService : IVaultService
         {
             EnsureParentDirectory(vaultPath);
 
+            if (File.Exists(vaultPath))
+            {
+                var existingVaultResult = await ValidateExistingVaultForRewriteAsync(
+                    vaultPath,
+                    masterPassword,
+                    cancellationToken);
+
+                if (!existingVaultResult.Succeeded)
+                {
+                    return existingVaultResult;
+                }
+            }
+
             using var database = Database.Create(masterPassword);
+            MarkAsAppManaged(database);
             foreach (var account in snapshot.Entries)
             {
                 database.RootGroup.AddEntry(MapEntry(account));
@@ -102,6 +133,10 @@ public sealed class DgNetVaultService : IVaultService
 
             await SaveDatabaseReplacingTargetAsync(database, vaultPath, cancellationToken);
             return VaultOperationResult.Success();
+        }
+        catch (ArgumentException ex)
+        {
+            return VaultOperationResult.Failure(VaultError.InvalidEntry, ex.GetType().Name);
         }
         catch (Exception ex)
         {
@@ -115,9 +150,9 @@ public sealed class DgNetVaultService : IVaultService
 
         return new AccountEntry(
             Guid.NewGuid(),
-            draft.ServiceName.Trim(),
-            draft.WebsiteUrl.Trim(),
-            draft.UsernameOrEmail.Trim(),
+            draft.ServiceName,
+            draft.WebsiteUrl,
+            draft.UsernameOrEmail,
             draft.Password,
             draft.Notes,
             NormalizeTags(draft.Tags));
@@ -152,7 +187,7 @@ public sealed class DgNetVaultService : IVaultService
     private static IReadOnlyList<string> NormalizeTags(IEnumerable<string> tags)
     {
         return tags
-            .Select(tag => tag.Trim())
+            .Select((tag, index) => NormalizeTag(tag, index))
             .Where(tag => tag.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
@@ -166,6 +201,22 @@ public sealed class DgNetVaultService : IVaultService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static string NormalizeTag(string? tag, int index)
+    {
+        if (tag is null)
+        {
+            throw new ArgumentException($"Tag at index {index} cannot be null.", nameof(tag));
+        }
+
+        var normalized = tag.Trim();
+        if (normalized.Contains(TagSeparator, StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"Tags cannot contain '{TagSeparator}'.", nameof(tag));
+        }
+
+        return normalized;
     }
 
     private static VaultOperationResult? ValidateVaultInput(string vaultPath, string masterPassword)
@@ -190,6 +241,69 @@ public sealed class DgNetVaultService : IVaultService
         {
             Directory.CreateDirectory(parentDirectory);
         }
+    }
+
+    private static async Task<VaultOperationResult> ValidateExistingVaultForRewriteAsync(
+        string vaultPath,
+        string masterPassword,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var existingDatabase = new Database(vaultPath, masterPassword);
+            await existingDatabase.OpenAsync(cancellationToken);
+
+            return ValidateAppManagedDatabase(existingDatabase) ?? VaultOperationResult.Success();
+        }
+        catch (Exception ex)
+        {
+            return VaultOperationResult.Failure(VaultError.OpenFailed, ex.GetType().Name);
+        }
+    }
+
+    private static VaultOperationResult? ValidateAppManagedDatabase(Database database)
+    {
+        if (!IsAppManagedDatabase(database))
+        {
+            return VaultOperationResult.Failure(VaultError.UnsupportedVaultFormat);
+        }
+
+        if (HasUnsupportedFeatures(database))
+        {
+            return VaultOperationResult.Failure(VaultError.UnsupportedVaultFeatures);
+        }
+
+        return null;
+    }
+
+    private static void MarkAsAppManaged(Database database)
+    {
+        database.Metadata.Name = AppVaultName;
+        database.Metadata.Description = AppVaultMarker;
+    }
+
+    private static bool IsAppManagedDatabase(Database database)
+    {
+        return string.Equals(database.Metadata.Description, AppVaultMarker, StringComparison.Ordinal);
+    }
+
+    private static bool HasUnsupportedFeatures(Database database)
+    {
+        if (database.RootGroup.Groups.Count > 0)
+        {
+            return true;
+        }
+
+        return database.RootGroup
+            .FindAllEntries(_ => true)
+            .Any(HasUnsupportedEntryFeatures);
+    }
+
+    private static bool HasUnsupportedEntryFeatures(Entry entry)
+    {
+        return entry.Binaries.Count > 0
+            || entry.History.Count > 0
+            || entry.Strings.Keys.Any(key => !StandardEntryStringKeys.Contains(key));
     }
 
     private static async Task SaveDatabaseReplacingTargetAsync(

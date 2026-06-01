@@ -1,4 +1,5 @@
 using System.Text;
+using DgNet.Keepass;
 using PasswordManager.Core;
 
 namespace PasswordManager.Infrastructure.Tests;
@@ -107,6 +108,85 @@ public sealed class DgNetVaultServiceTests
         AssertEntryEqual(updatedFirstEntry, loadedEntry);
     }
 
+    [Fact]
+    public async Task SaveAsync_WithWrongPasswordFailsAndPreservesExistingVault()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        var originalEntry = CreateEntry(serviceName: "Original", usernameOrEmail: "original@example.test");
+        var replacementEntry = CreateEntry(serviceName: "Replacement", usernameOrEmail: "replacement@example.test");
+
+        var saveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(originalEntry));
+        var wrongPasswordSaveResult = await service.SaveAsync(
+            vaultPath,
+            WrongPassword,
+            VaultSnapshot.Empty.Add(replacementEntry));
+        var loadWithOriginalPasswordResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var loadWithWrongPasswordResult = await service.LoadAsync(vaultPath, WrongPassword);
+
+        Assert.True(saveResult.Succeeded);
+        Assert.False(wrongPasswordSaveResult.Succeeded);
+        Assert.Equal(VaultError.OpenFailed, wrongPasswordSaveResult.Error);
+        Assert.True(loadWithOriginalPasswordResult.Succeeded);
+        Assert.False(loadWithWrongPasswordResult.Succeeded);
+
+        var loadedEntry = Assert.Single(loadWithOriginalPasswordResult.Value!.Entries);
+        AssertEntryEqual(originalEntry, loadedEntry);
+    }
+
+    [Fact]
+    public async Task LoadAndSaveAsync_RejectVaultsNotCreatedByThisApp()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+        var unmanagedEntry = CreateEntry(serviceName: "External", usernameOrEmail: "external@example.test");
+        CreateUnmanagedVault(vaultPath, unmanagedEntry);
+
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var saveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(CreateEntry(serviceName: "Replacement")));
+
+        Assert.False(loadResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFormat, loadResult.Error);
+        Assert.False(saveResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFormat, saveResult.Error);
+
+        using var database = Database.Open(vaultPath, MasterPassword);
+        var preservedEntry = Assert.Single(database.RootGroup.Entries);
+        Assert.Equal(unmanagedEntry.ServiceName, preservedEntry.Title);
+        Assert.Equal(unmanagedEntry.UsernameOrEmail, preservedEntry.UserName);
+    }
+
+    [Fact]
+    public async Task LoadAndSaveAsync_RejectAppManagedVaultsWithUnsupportedStructure()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var service = new DgNetVaultService();
+        var vaultPath = temp.GetVaultPath();
+
+        var createResult = await service.CreateAsync(vaultPath, MasterPassword);
+        AddUnsupportedGroup(vaultPath);
+
+        var loadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var saveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            VaultSnapshot.Empty.Add(CreateEntry()));
+
+        Assert.True(createResult.Succeeded);
+        Assert.False(loadResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, loadResult.Error);
+        Assert.False(saveResult.Succeeded);
+        Assert.Equal(VaultError.UnsupportedVaultFeatures, saveResult.Error);
+    }
+
     private static AccountEntry CreateEntry(
         string serviceName = "GitHub",
         string websiteUrl = "https://github.com",
@@ -133,5 +213,29 @@ public sealed class DgNetVaultServiceTests
         Assert.Equal(expected.Password, actual.Password);
         Assert.Equal(expected.Notes, actual.Notes);
         Assert.Equal(expected.Tags, actual.Tags);
+    }
+
+    private static void CreateUnmanagedVault(string vaultPath, AccountEntry entry)
+    {
+        using var database = Database.Create(MasterPassword);
+        database.RootGroup.AddEntry(new Entry
+        {
+            Uuid = entry.Id,
+            Title = entry.ServiceName,
+            UserName = entry.UsernameOrEmail,
+            Password = entry.Password,
+            Url = entry.WebsiteUrl,
+            Notes = entry.Notes,
+            Tags = string.Join(';', entry.Tags)
+        });
+
+        database.SaveAs(vaultPath);
+    }
+
+    private static void AddUnsupportedGroup(string vaultPath)
+    {
+        using var database = Database.Open(vaultPath, MasterPassword);
+        database.RootGroup.AddGroup(new Group { Name = "Unsupported nested group" });
+        database.Save();
     }
 }
