@@ -29,6 +29,9 @@ jobs:
       - name: Build
         run: dotnet build PasswordManager.slnx --configuration Release --no-restore
 
+      - name: Test
+        run: dotnet test PasswordManager.slnx --configuration Release --no-build
+
       - name: Run infrastructure validation
         run: dotnet run --project tests\PasswordManager.Infrastructure.Validation\PasswordManager.Infrastructure.Validation.csproj --configuration Release --no-build
 
