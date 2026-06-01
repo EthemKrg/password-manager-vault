@@ -129,7 +129,7 @@ public sealed class VaultSnapshotTests
 
     private static AccountEntry CreateEntry(string serviceName, string usernameOrEmail, IReadOnlyList<string> tags)
     {
-        return DgNetVaultService.CreateEntry(new AccountEntryDraft(
+        return AccountEntry.Create(new AccountEntryDraft(
             serviceName,
             $"https://{serviceName.ToLowerInvariant()}.example.test",
             usernameOrEmail,

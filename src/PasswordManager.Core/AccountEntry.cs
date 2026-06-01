@@ -30,6 +30,20 @@ public sealed record AccountEntry
         Tags = tags;
     }
 
+    public static AccountEntry Create(AccountEntryDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+
+        return new AccountEntry(
+            Guid.NewGuid(),
+            draft.ServiceName,
+            draft.WebsiteUrl,
+            draft.UsernameOrEmail,
+            draft.Password,
+            draft.Notes,
+            draft.Tags);
+    }
+
     public Guid Id
     {
         get => _id;
