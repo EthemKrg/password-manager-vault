@@ -137,9 +137,39 @@
                            ReturnType="Done"
                            Focused="OnInputFocused"
                            Unfocused="OnInputUnfocused" />
+                    <Border Stroke="{StaticResource WarningLineBrush}"
+                            StrokeThickness="1"
+                            BackgroundColor="{StaticResource WarningSurface}"
+                            Padding="12">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="8" />
+                        </Border.StrokeShape>
+                        <VerticalStackLayout Spacing="8">
+                            <Label Text="Recovery warning"
+                                   FontSize="13"
+                                   FontAttributes="Bold"
+                                   TextColor="{StaticResource WarningText}" />
+                            <Label Text="If this master password is lost, this vault cannot be unlocked. The app does not store the password and no recovery key exists yet."
+                                   FontSize="13"
+                                   TextColor="{StaticResource WarningText}"
+                                   LineBreakMode="WordWrap" />
+                            <Grid ColumnDefinitions="Auto,*"
+                                  ColumnSpacing="10">
+                                <CheckBox x:Name="RecoveryWarningAcknowledgementCheckBox"
+                                          CheckedChanged="OnRecoveryAcknowledgementChanged" />
+                                <Label Grid.Column="1"
+                                       Text="I understand this vault cannot be recovered without the master password."
+                                       VerticalOptions="Center"
+                                       FontSize="13"
+                                       TextColor="#20231F"
+                                       LineBreakMode="WordWrap" />
+                            </Grid>
+                        </VerticalStackLayout>
+                    </Border>
                     <Grid ColumnDefinitions="*,*"
                           ColumnSpacing="12">
-                        <Button Text="Create vault"
+                        <Button x:Name="CreateVaultButton"
+                                Text="Create vault"
                                 Pressed="OnButtonPressed"
                                 Released="OnButtonReleased"
                                 Focused="OnButtonFocused"

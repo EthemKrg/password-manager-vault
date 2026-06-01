@@ -94,6 +94,12 @@ public partial class MainPage : ContentPage
 
         try
         {
+            if (!RecoveryWarningAcknowledgementCheckBox.IsChecked)
+            {
+                SetFeedback("Acknowledge the recovery warning before creating a vault.");
+                return;
+            }
+
             var masterPassword = CreatePasswordEntry.Text ?? string.Empty;
             if (string.IsNullOrWhiteSpace(masterPassword))
             {
@@ -109,7 +115,6 @@ public partial class MainPage : ContentPage
             }
 
             var result = await _vaultSession.CreateAsync(vaultPath, masterPassword);
-            CreatePasswordEntry.Text = string.Empty;
             if (!result.Succeeded)
             {
                 SetFeedback(Describe(result));
@@ -118,6 +123,7 @@ public partial class MainPage : ContentPage
 
             _pendingVaultPath = null;
             ClearExternalAnalysis();
+            ClearCreateVaultForm();
             ClearEntryForm();
             RefreshEntries();
             await RefreshBackupArtifactsAsync(showFeedback: false);
@@ -125,6 +131,7 @@ public partial class MainPage : ContentPage
         }
         finally
         {
+            CreatePasswordEntry.Text = string.Empty;
             EndOperation();
         }
     }
@@ -147,6 +154,7 @@ public partial class MainPage : ContentPage
 
             _pendingVaultPath = vaultPath;
             UnlockPasswordEntry.Text = string.Empty;
+            ClearCreateVaultForm();
             ClearExternalAnalysis();
             SetFeedback("Vault selected. Enter the master password.");
         }
@@ -298,6 +306,12 @@ public partial class MainPage : ContentPage
         {
             CancelPasswordRevealAutoHide();
         }
+    }
+
+    private void OnRecoveryAcknowledgementChanged(object? sender, CheckedChangedEventArgs e)
+    {
+        RecordUserActivity();
+        UpdateUi();
     }
 
     private async void OnCopyUsernameClicked(object? sender, EventArgs e)
@@ -1278,6 +1292,10 @@ public partial class MainPage : ContentPage
         UnlockPanel.IsVisible = !isUnlocked && (isLocked || hasPendingOpen);
         DashboardPanel.IsVisible = isUnlocked && !_isPrivacyMaskActive;
         PrivacyMaskPanel.IsVisible = _isPrivacyMaskActive;
+        CreateVaultButton.IsEnabled = !isUnlocked
+            && !isLocked
+            && !hasPendingOpen
+            && RecoveryWarningAcknowledgementCheckBox.IsChecked;
         UnsavedBadge.IsVisible = _vaultSession.HasUnsavedChanges;
         SaveVaultButton.IsEnabled = _vaultSession.HasUnsavedChanges;
         PrivacySaveAndLockButton.IsEnabled = isUnlocked && _vaultSession.HasUnsavedChanges;
@@ -1292,6 +1310,7 @@ public partial class MainPage : ContentPage
         ExternalAnalysisDivider.IsVisible = !isUnlocked && _hasExternalAnalysis;
         ExternalAnalysisPanel.IsVisible = !isUnlocked && _hasExternalAnalysis;
         ExternalPreviewCollection.IsVisible = _hasExternalAnalysis && _externalPreviewEntries.Count > 0;
+        ApplyButtonState(CreateVaultButton, pressed: false, focused: CreateVaultButton.IsFocused, hovered: _hoveredButtons.Contains(CreateVaultButton));
         ApplyButtonState(SaveVaultButton, pressed: false, focused: SaveVaultButton.IsFocused, hovered: _hoveredButtons.Contains(SaveVaultButton));
         ApplyButtonState(RefreshBackupsButton, pressed: false, focused: RefreshBackupsButton.IsFocused, hovered: _hoveredButtons.Contains(RefreshBackupsButton));
         ApplyButtonState(RestoreBackupButton, pressed: false, focused: RestoreBackupButton.IsFocused, hovered: _hoveredButtons.Contains(RestoreBackupButton));
@@ -1343,6 +1362,12 @@ public partial class MainPage : ContentPage
         CurrentMasterPasswordEntry.Text = string.Empty;
         NewMasterPasswordEntry.Text = string.Empty;
         ConfirmNewMasterPasswordEntry.Text = string.Empty;
+    }
+
+    private void ClearCreateVaultForm()
+    {
+        CreatePasswordEntry.Text = string.Empty;
+        RecoveryWarningAcknowledgementCheckBox.IsChecked = false;
     }
 
     private void SetInputFocusState(object? sender, bool focused)
