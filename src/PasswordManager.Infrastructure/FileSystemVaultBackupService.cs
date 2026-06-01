@@ -158,8 +158,7 @@ public sealed class FileSystemVaultBackupService : IVaultBackupService
             {
                 DeleteIfExists(conflictPath);
                 return VaultOperationResult<VaultBackupArtifact>.Failure(
-                    VaultError.ConflictCopyFailed,
-                    saveResult.Message ?? saveResult.Error.ToString());
+                    VaultError.ConflictCopyFailed);
             }
 
             return VaultOperationResult<VaultBackupArtifact>.Success(
@@ -219,7 +218,7 @@ public sealed class FileSystemVaultBackupService : IVaultBackupService
                 cancellationToken);
             if (!backupLoadResult.Succeeded)
             {
-                return VaultOperationResult.Failure(backupLoadResult.Error, backupLoadResult.Message);
+                return VaultOperationResult.Failure(backupLoadResult.Error);
             }
 
             restoreTemporaryPath = GetRestoreTemporaryPath(fullVaultPath);
@@ -241,7 +240,7 @@ public sealed class FileSystemVaultBackupService : IVaultBackupService
                 cancellationToken);
             if (!temporaryLoadResult.Succeeded)
             {
-                return VaultOperationResult.Failure(temporaryLoadResult.Error, temporaryLoadResult.Message);
+                return VaultOperationResult.Failure(temporaryLoadResult.Error);
             }
 
             var preRestoreBackupResult = await CreateBackupAsync(
@@ -250,9 +249,7 @@ public sealed class FileSystemVaultBackupService : IVaultBackupService
                 cancellationToken);
             if (!preRestoreBackupResult.Succeeded)
             {
-                return VaultOperationResult.Failure(
-                    preRestoreBackupResult.Error,
-                    preRestoreBackupResult.Message);
+                return VaultOperationResult.Failure(preRestoreBackupResult.Error);
             }
 
             ReplaceTargetWithTemporaryFile(restoreTemporaryPath, fullVaultPath);
