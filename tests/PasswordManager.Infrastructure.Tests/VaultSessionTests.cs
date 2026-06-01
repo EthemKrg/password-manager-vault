@@ -33,6 +33,7 @@ public sealed class VaultSessionTests
         var listBackupsResult = await session.ListBackupArtifactsAsync();
         var saveResult = await session.SaveAsync();
         var restoreResult = await session.RestoreBackupAsync("backup.kdbx", MasterPassword);
+        var changePasswordResult = await session.ChangeMasterPasswordAsync(MasterPassword, "new master password");
 
         Assert.False(addResult.Succeeded);
         Assert.Equal(VaultError.NoVaultLoaded, addResult.Error);
@@ -48,6 +49,8 @@ public sealed class VaultSessionTests
         Assert.Equal(VaultError.NoVaultLoaded, saveResult.Error);
         Assert.False(restoreResult.Succeeded);
         Assert.Equal(VaultError.NoVaultLoaded, restoreResult.Error);
+        Assert.False(changePasswordResult.Succeeded);
+        Assert.Equal(VaultError.NoVaultLoaded, changePasswordResult.Error);
     }
 
     [Fact]
@@ -64,6 +67,7 @@ public sealed class VaultSessionTests
         var listBackupsResult = await session.ListBackupArtifactsAsync();
         var saveResult = await session.SaveAsync();
         var restoreResult = await session.RestoreBackupAsync("backup.kdbx", MasterPassword);
+        var changePasswordResult = await session.ChangeMasterPasswordAsync(MasterPassword, "new master password");
 
         Assert.True(unlockResult.Succeeded);
         Assert.True(lockResult.Succeeded);
@@ -78,6 +82,8 @@ public sealed class VaultSessionTests
         Assert.Equal(VaultError.VaultLocked, saveResult.Error);
         Assert.False(restoreResult.Succeeded);
         Assert.Equal(VaultError.VaultLocked, restoreResult.Error);
+        Assert.False(changePasswordResult.Succeeded);
+        Assert.Equal(VaultError.VaultLocked, changePasswordResult.Error);
     }
 
     [Fact]
@@ -432,6 +438,148 @@ public sealed class VaultSessionTests
     }
 
     [Fact]
+    public async Task ChangeMasterPasswordAsync_WhenDirtyReturnsUnsavedChangesAndDoesNotTouchDisk()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot([], "fp-before")));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+        var addResult = session.AddEntry(CreateDraft("GitHub"));
+
+        var result = await session.ChangeMasterPasswordAsync(MasterPassword, "new master password");
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(VaultError.UnsavedChanges, result.Error);
+        Assert.True(session.HasUnsavedChanges);
+        Assert.Equal(addResult.Value!.Id, Assert.Single(session.CurrentSnapshot!.Entries).Id);
+        Assert.Empty(backupService.BackupCalls);
+        Assert.Empty(service.ChangeMasterPasswordCalls);
+    }
+
+    [Fact]
+    public async Task ChangeMasterPasswordAsync_SuccessVerifiesBacksUpChangesAndReloadsWithNewPassword()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        var currentSnapshot = new VaultSnapshot([CreateEntry("Current")], "fp-before");
+        var changedSnapshot = new VaultSnapshot([CreateEntry("Reloaded")], "fp-after");
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(currentSnapshot));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(currentSnapshot));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(changedSnapshot));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+
+        var result = await session.ChangeMasterPasswordAsync(MasterPassword, "new master password");
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(VaultSessionState.Unlocked, session.State);
+        Assert.False(session.HasUnsavedChanges);
+        Assert.Equal("fp-after", session.CurrentSnapshot!.SourceFingerprint);
+        Assert.Equal("Reloaded", Assert.Single(session.CurrentSnapshot.Entries).ServiceName);
+        Assert.Equal([VaultPath], backupService.BackupCalls);
+
+        Assert.Equal(3, service.LoadCalls.Count);
+        Assert.Equal((VaultPath, MasterPassword), service.LoadCalls[0]);
+        Assert.Equal((VaultPath, MasterPassword), service.LoadCalls[1]);
+        Assert.Equal((VaultPath, "new master password"), service.LoadCalls[2]);
+
+        var changeCall = Assert.Single(service.ChangeMasterPasswordCalls);
+        Assert.Equal(VaultPath, changeCall.Path);
+        Assert.Equal(MasterPassword, changeCall.CurrentPassword);
+        Assert.Equal("new master password", changeCall.NewPassword);
+        Assert.Same(currentSnapshot, changeCall.Snapshot);
+    }
+
+    [Fact]
+    public async Task ChangeMasterPasswordAsync_WrongCurrentPasswordPreservesSessionAndDoesNotCreateBackup()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        var currentSnapshot = new VaultSnapshot([CreateEntry("Current")], "fp-before");
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(currentSnapshot));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Failure(VaultError.OpenFailed));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+
+        var result = await session.ChangeMasterPasswordAsync(WrongPassword, "new master password");
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(VaultError.OpenFailed, result.Error);
+        Assert.Equal(VaultSessionState.Unlocked, session.State);
+        Assert.Same(currentSnapshot, session.CurrentSnapshot);
+        Assert.False(session.HasUnsavedChanges);
+        Assert.Empty(backupService.BackupCalls);
+        Assert.Empty(service.ChangeMasterPasswordCalls);
+    }
+
+    [Fact]
+    public async Task ChangeMasterPasswordAsync_WhenVaultChangedOnDiskReturnsStaleAndDoesNotCreateBackup()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        var currentSnapshot = new VaultSnapshot([CreateEntry("Current")], "fp-before");
+        var changedOnDiskSnapshot = new VaultSnapshot([CreateEntry("Changed")], "fp-changed");
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(currentSnapshot));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(changedOnDiskSnapshot));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+
+        var result = await session.ChangeMasterPasswordAsync(MasterPassword, "new master password");
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(VaultError.StaleVaultSnapshot, result.Error);
+        Assert.Same(currentSnapshot, session.CurrentSnapshot);
+        Assert.False(session.HasUnsavedChanges);
+        Assert.Empty(backupService.BackupCalls);
+        Assert.Empty(service.ChangeMasterPasswordCalls);
+    }
+
+    [Fact]
+    public async Task ChangeMasterPasswordAsync_WhenBackupFailsDoesNotChangePassword()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        backupService.BackupResults.Enqueue(
+            VaultOperationResult<VaultBackupArtifact>.Failure(VaultError.BackupFailed));
+        var currentSnapshot = new VaultSnapshot([CreateEntry("Current")], "fp-before");
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(currentSnapshot));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(currentSnapshot));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+
+        var result = await session.ChangeMasterPasswordAsync(MasterPassword, "new master password");
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(VaultError.BackupFailed, result.Error);
+        Assert.Same(currentSnapshot, session.CurrentSnapshot);
+        Assert.False(session.HasUnsavedChanges);
+        Assert.Empty(service.ChangeMasterPasswordCalls);
+    }
+
+    [Fact]
+    public async Task ChangeMasterPasswordAsync_WhenServiceFailsPreservesCurrentSession()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        var currentSnapshot = new VaultSnapshot([CreateEntry("Current")], "fp-before");
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(currentSnapshot));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(currentSnapshot));
+        service.ChangeMasterPasswordResults.Enqueue(VaultOperationResult.Failure(VaultError.SaveFailed));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+
+        var result = await session.ChangeMasterPasswordAsync(MasterPassword, "new master password");
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(VaultError.SaveFailed, result.Error);
+        Assert.Equal(VaultSessionState.Unlocked, session.State);
+        Assert.Same(currentSnapshot, session.CurrentSnapshot);
+        Assert.False(session.HasUnsavedChanges);
+        Assert.Single(backupService.BackupCalls);
+    }
+
+    [Fact]
     public async Task LockAndClose_ProtectUnsavedChangesUnlessDiscarded()
     {
         var session = await CreateUnlockedSession(new VaultSnapshot([], "fp-1"));
@@ -520,6 +668,40 @@ public sealed class VaultSessionTests
         Assert.False(session.HasUnsavedChanges);
     }
 
+    [Fact]
+    public async Task VaultSession_WithDgNetVaultService_ChangesMasterPasswordAndKeepsEncryptedBackup()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var vaultPath = temp.GetVaultPath();
+        var service = new DgNetVaultService();
+        var session = new VaultSession(
+            service,
+            vaultBackupService: new FileSystemVaultBackupService(service));
+
+        var createResult = await session.CreateAsync(vaultPath, MasterPassword);
+        var addResult = session.AddEntry(CreateDraft("GitHub"));
+        var saveResult = await session.SaveAsync();
+        var changeResult = await session.ChangeMasterPasswordAsync(MasterPassword, "new session master password");
+        var lockResult = session.Lock();
+        var oldUnlockResult = await session.UnlockCurrentAsync(MasterPassword);
+        var newUnlockResult = await session.UnlockCurrentAsync("new session master password");
+        var searchResult = session.Search(new VaultSearchQuery("github"));
+        var backupResult = await session.ListBackupArtifactsAsync();
+
+        Assert.True(createResult.Succeeded);
+        Assert.True(addResult.Succeeded);
+        Assert.True(saveResult.Succeeded);
+        Assert.True(changeResult.Succeeded);
+        Assert.True(lockResult.Succeeded);
+        Assert.False(oldUnlockResult.Succeeded);
+        Assert.True(newUnlockResult.Succeeded);
+        Assert.True(searchResult.Succeeded);
+        Assert.Equal(addResult.Value!.Id, Assert.Single(searchResult.Value!).Id);
+        Assert.True(backupResult.Succeeded);
+        Assert.NotEmpty(backupResult.Value!);
+        Assert.True(backupResult.Value!.All(artifact => File.Exists(artifact.FilePath)));
+    }
+
     private static async Task<VaultSession> CreateUnlockedSession(
         VaultSnapshot snapshot,
         TimeProvider? timeProvider = null)
@@ -571,11 +753,15 @@ public sealed class VaultSessionTests
 
         public Queue<VaultOperationResult> SaveResults { get; } = new();
 
+        public Queue<VaultOperationResult> ChangeMasterPasswordResults { get; } = new();
+
         public List<(string Path, string Password)> CreateCalls { get; } = [];
 
         public List<(string Path, string Password)> LoadCalls { get; } = [];
 
         public List<(string Path, string Password, VaultSnapshot Snapshot)> SaveCalls { get; } = [];
+
+        public List<(string Path, string CurrentPassword, string NewPassword, VaultSnapshot Snapshot)> ChangeMasterPasswordCalls { get; } = [];
 
         public Task<VaultOperationResult> CreateAsync(
             string vaultPath,
@@ -608,6 +794,19 @@ public sealed class VaultSessionTests
             SaveCalls.Add((vaultPath, masterPassword, snapshot));
             return Task.FromResult(SaveResults.Count > 0
                 ? SaveResults.Dequeue()
+                : VaultOperationResult.Success());
+        }
+
+        public Task<VaultOperationResult> ChangeMasterPasswordAsync(
+            string vaultPath,
+            string currentMasterPassword,
+            string newMasterPassword,
+            VaultSnapshot snapshot,
+            CancellationToken cancellationToken = default)
+        {
+            ChangeMasterPasswordCalls.Add((vaultPath, currentMasterPassword, newMasterPassword, snapshot));
+            return Task.FromResult(ChangeMasterPasswordResults.Count > 0
+                ? ChangeMasterPasswordResults.Dequeue()
                 : VaultOperationResult.Success());
         }
     }

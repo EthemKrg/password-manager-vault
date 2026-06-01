@@ -17,4 +17,11 @@ public interface IVaultService
         string masterPassword,
         VaultSnapshot snapshot,
         CancellationToken cancellationToken = default);
+
+    Task<VaultOperationResult> ChangeMasterPasswordAsync(
+        string vaultPath,
+        string currentMasterPassword,
+        string newMasterPassword,
+        VaultSnapshot snapshot,
+        CancellationToken cancellationToken = default);
 }

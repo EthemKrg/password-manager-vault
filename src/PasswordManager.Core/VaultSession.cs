@@ -327,6 +327,81 @@ public sealed class VaultSession : IVaultSession
         return VaultOperationResult.Success();
     }
 
+    public async Task<VaultOperationResult> ChangeMasterPasswordAsync(
+        string currentMasterPassword,
+        string newMasterPassword,
+        CancellationToken cancellationToken = default)
+    {
+        var stateCheck = EnsureUnlocked();
+        if (stateCheck is not null)
+        {
+            return stateCheck;
+        }
+
+        if (HasUnsavedChanges)
+        {
+            return VaultOperationResult.Failure(VaultError.UnsavedChanges);
+        }
+
+        if (string.IsNullOrWhiteSpace(currentMasterPassword)
+            || string.IsNullOrWhiteSpace(newMasterPassword)
+            || string.Equals(currentMasterPassword, newMasterPassword, StringComparison.Ordinal))
+        {
+            return VaultOperationResult.Failure(VaultError.InvalidMasterPassword);
+        }
+
+        var currentLoadResult = await _vaultService.LoadAsync(
+            VaultPath!,
+            currentMasterPassword,
+            cancellationToken);
+        if (!currentLoadResult.Succeeded)
+        {
+            return VaultOperationResult.Failure(currentLoadResult.Error, currentLoadResult.Message);
+        }
+
+        if (!string.Equals(
+                currentLoadResult.Value!.SourceFingerprint,
+                CurrentSnapshot!.SourceFingerprint,
+                StringComparison.Ordinal))
+        {
+            return VaultOperationResult.Failure(
+                VaultError.StaleVaultSnapshot,
+                "Vault changed on disk before master password change.");
+        }
+
+        if (_vaultBackupService is not null)
+        {
+            var backupResult = await _vaultBackupService.CreateBackupAsync(
+                VaultPath!,
+                _vaultBackupOptions,
+                cancellationToken);
+            if (!backupResult.Succeeded)
+            {
+                return VaultOperationResult.Failure(backupResult.Error, backupResult.Message);
+            }
+        }
+
+        var changeResult = await _vaultService.ChangeMasterPasswordAsync(
+            VaultPath!,
+            currentMasterPassword,
+            newMasterPassword,
+            CurrentSnapshot!,
+            cancellationToken);
+        if (!changeResult.Succeeded)
+        {
+            return changeResult;
+        }
+
+        var reloadResult = await _vaultService.LoadAsync(VaultPath!, newMasterPassword, cancellationToken);
+        if (!reloadResult.Succeeded)
+        {
+            return VaultOperationResult.Failure(reloadResult.Error, reloadResult.Message);
+        }
+
+        SetUnlocked(VaultPath!, newMasterPassword, reloadResult.Value!);
+        return VaultOperationResult.Success();
+    }
+
     private VaultOperationResult AddEntryToCurrentSnapshot(AccountEntry entry)
     {
         try

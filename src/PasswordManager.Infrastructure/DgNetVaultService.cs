@@ -153,14 +153,64 @@ public sealed class DgNetVaultService : IVaultService
                 }
             }
 
-            using var database = Database.Create(masterPassword);
-            MarkAsAppManaged(database);
-            foreach (var account in snapshot.Entries)
+            await SaveSnapshotReplacingTargetAsync(vaultPath, masterPassword, snapshot, cancellationToken);
+            return VaultOperationResult.Success();
+        }
+        catch (ArgumentException ex)
+        {
+            return VaultOperationResult.Failure(VaultError.InvalidEntry, ex.GetType().Name);
+        }
+        catch (Exception ex)
+        {
+            return VaultOperationResult.Failure(VaultError.SaveFailed, ex.GetType().Name);
+        }
+    }
+
+    public async Task<VaultOperationResult> ChangeMasterPasswordAsync(
+        string vaultPath,
+        string currentMasterPassword,
+        string newMasterPassword,
+        VaultSnapshot snapshot,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var currentValidation = ValidateVaultInput(vaultPath, currentMasterPassword);
+        if (currentValidation is not null)
+        {
+            return currentValidation;
+        }
+
+        if (string.IsNullOrWhiteSpace(newMasterPassword))
+        {
+            return VaultOperationResult.Failure(VaultError.InvalidMasterPassword);
+        }
+
+        if (string.Equals(currentMasterPassword, newMasterPassword, StringComparison.Ordinal))
+        {
+            return VaultOperationResult.Failure(VaultError.InvalidMasterPassword);
+        }
+
+        if (!File.Exists(vaultPath))
+        {
+            return VaultOperationResult.Failure(VaultError.FileNotFound);
+        }
+
+        try
+        {
+            EnsureParentDirectory(vaultPath);
+
+            var existingVaultResult = await ValidateExistingVaultForRewriteAsync(
+                vaultPath,
+                currentMasterPassword,
+                snapshot,
+                cancellationToken);
+            if (!existingVaultResult.Succeeded)
             {
-                database.RootGroup.AddEntry(MapEntry(account));
+                return existingVaultResult;
             }
 
-            await SaveDatabaseReplacingTargetAsync(database, vaultPath, cancellationToken);
+            await SaveSnapshotReplacingTargetAsync(vaultPath, newMasterPassword, snapshot, cancellationToken);
             return VaultOperationResult.Success();
         }
         catch (ArgumentException ex)
@@ -607,5 +657,21 @@ public sealed class DgNetVaultService : IVaultService
                 File.Delete(temporaryPath);
             }
         }
+    }
+
+    private static async Task SaveSnapshotReplacingTargetAsync(
+        string vaultPath,
+        string masterPassword,
+        VaultSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        using var database = Database.Create(masterPassword);
+        MarkAsAppManaged(database);
+        foreach (var account in snapshot.Entries)
+        {
+            database.RootGroup.AddEntry(MapEntry(account));
+        }
+
+        await SaveDatabaseReplacingTargetAsync(database, vaultPath, cancellationToken);
     }
 }

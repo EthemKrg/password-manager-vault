@@ -44,6 +44,11 @@ public interface IVaultSession
         string masterPassword,
         CancellationToken cancellationToken = default);
 
+    Task<VaultOperationResult> ChangeMasterPasswordAsync(
+        string currentMasterPassword,
+        string newMasterPassword,
+        CancellationToken cancellationToken = default);
+
     VaultOperationResult Lock(bool discardUnsavedChanges = false);
 
     VaultOperationResult Close(bool discardUnsavedChanges = false);
