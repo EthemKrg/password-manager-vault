@@ -13,7 +13,9 @@ public partial class MainPage : ContentPage
     private readonly IVaultFilePicker _filePicker;
     private readonly IClipboardService _clipboardService;
     private readonly ObservableCollection<AccountEntry> _entries = [];
+    private readonly ObservableCollection<BackupArtifactViewModel> _backupArtifacts = [];
     private AccountEntry? _selectedEntry;
+    private BackupArtifactViewModel? _selectedBackupArtifact;
     private string? _pendingVaultPath;
     private string? _trackedClipboardText;
     private CancellationTokenSource? _clipboardCountdownCancellation;
@@ -29,6 +31,7 @@ public partial class MainPage : ContentPage
         _filePicker = filePicker;
         _clipboardService = clipboardService;
         EntryCollection.ItemsSource = _entries;
+        BackupCollection.ItemsSource = _backupArtifacts;
         AttachButtonHoverHandlers(this);
         UpdateUi();
     }
@@ -74,6 +77,7 @@ public partial class MainPage : ContentPage
             _pendingVaultPath = null;
             ClearEntryForm();
             RefreshEntries();
+            await RefreshBackupArtifactsAsync(showFeedback: false);
             SetFeedback("Vault created and unlocked.");
         }
         finally
@@ -334,6 +338,7 @@ public partial class MainPage : ContentPage
 
             _pendingVaultPath = null;
             RefreshEntries();
+            await RefreshBackupArtifactsAsync(showFeedback: false);
             SetFeedback("Vault unlocked.");
         }
         finally
@@ -371,7 +376,11 @@ public partial class MainPage : ContentPage
             await ClearTrackedClipboardAsync(updateStatus: true);
             _pendingVaultPath = null;
             _selectedEntry = null;
+            _selectedBackupArtifact = null;
             EntryCollection.SelectedItem = null;
+            BackupCollection.SelectedItem = null;
+            RestorePasswordEntry.Text = string.Empty;
+            _backupArtifacts.Clear();
             ClearEntryForm();
             RefreshEntries();
             SetFeedback(close ? "Vault closed." : "Vault locked.");
@@ -412,15 +421,93 @@ public partial class MainPage : ContentPage
         var result = await _vaultSession.SaveAsync();
         if (!result.Succeeded)
         {
-            SetFeedback(Describe(result));
+            await RefreshBackupArtifactsAsync(showFeedback: false);
+            SetFeedback(result.Error == VaultError.StaleVaultSnapshot
+                ? "Vault changed on disk. A conflict copy is listed under Backups."
+                : Describe(result));
             UpdateUi();
             return false;
         }
 
         HidePassword();
         RefreshEntries();
+        await RefreshBackupArtifactsAsync(showFeedback: false);
         SetFeedback("Vault saved.");
         return true;
+    }
+
+    private async void OnRefreshBackupsClicked(object? sender, EventArgs e)
+    {
+        if (!TryBeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            await RefreshBackupArtifactsAsync(showFeedback: true);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    private void OnBackupSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        _selectedBackupArtifact = e.CurrentSelection.FirstOrDefault() as BackupArtifactViewModel;
+        UpdateUi();
+    }
+
+    private async void OnRestoreBackupClicked(object? sender, EventArgs e)
+    {
+        if (_selectedBackupArtifact is null || !TryBeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            var masterPassword = RestorePasswordEntry.Text ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(masterPassword))
+            {
+                SetFeedback("Master password is required to restore.");
+                return;
+            }
+
+            var confirmed = await DisplayAlertAsync(
+                "Restore backup",
+                "The current vault will be backed up, then replaced by the selected encrypted backup.",
+                "Restore",
+                "Cancel");
+            if (!confirmed)
+            {
+                SetFeedback("Restore cancelled.");
+                return;
+            }
+
+            var result = await _vaultSession.RestoreBackupAsync(
+                _selectedBackupArtifact.Artifact.FilePath,
+                masterPassword);
+            RestorePasswordEntry.Text = string.Empty;
+            if (!result.Succeeded)
+            {
+                SetFeedback(Describe(result));
+                return;
+            }
+
+            HidePassword();
+            _selectedEntry = null;
+            EntryCollection.SelectedItem = null;
+            ClearEntryForm();
+            RefreshEntries();
+            await RefreshBackupArtifactsAsync(showFeedback: false);
+            SetFeedback("Vault restored from encrypted backup.");
+        }
+        finally
+        {
+            EndOperation();
+        }
     }
 
     private async Task CopySensitiveTextAsync(string? text, string label)
@@ -711,6 +798,45 @@ public partial class MainPage : ContentPage
         UpdateUi();
     }
 
+    private async Task RefreshBackupArtifactsAsync(bool showFeedback)
+    {
+        _backupArtifacts.Clear();
+        _selectedBackupArtifact = null;
+        BackupCollection.SelectedItem = null;
+
+        if (_vaultSession.State != VaultSessionState.Unlocked)
+        {
+            UpdateUi();
+            return;
+        }
+
+        var result = await _vaultSession.ListBackupArtifactsAsync();
+        if (!result.Succeeded)
+        {
+            if (showFeedback)
+            {
+                SetFeedback(Describe(result));
+            }
+
+            UpdateUi();
+            return;
+        }
+
+        foreach (var artifact in result.Value!)
+        {
+            _backupArtifacts.Add(new BackupArtifactViewModel(artifact));
+        }
+
+        if (showFeedback)
+        {
+            SetFeedback(_backupArtifacts.Count == 0
+                ? "No backups found."
+                : "Backups refreshed.");
+        }
+
+        UpdateUi();
+    }
+
     private void RenderSelectedEntry()
     {
         if (_selectedEntry is null)
@@ -764,8 +890,13 @@ public partial class MainPage : ContentPage
         DashboardPanel.IsVisible = isUnlocked;
         UnsavedBadge.IsVisible = _vaultSession.HasUnsavedChanges;
         SaveVaultButton.IsEnabled = _vaultSession.HasUnsavedChanges;
+        RefreshBackupsButton.IsEnabled = isUnlocked;
+        RestoreBackupButton.IsEnabled = isUnlocked && !_vaultSession.HasUnsavedChanges && _selectedBackupArtifact is not null;
         EmptyListLabel.IsVisible = isUnlocked && _entries.Count == 0;
+        EmptyBackupsLabel.IsVisible = isUnlocked && _backupArtifacts.Count == 0;
         ApplyButtonState(SaveVaultButton, pressed: false, focused: SaveVaultButton.IsFocused, hovered: _hoveredButtons.Contains(SaveVaultButton));
+        ApplyButtonState(RefreshBackupsButton, pressed: false, focused: RefreshBackupsButton.IsFocused, hovered: _hoveredButtons.Contains(RefreshBackupsButton));
+        ApplyButtonState(RestoreBackupButton, pressed: false, focused: RestoreBackupButton.IsFocused, hovered: _hoveredButtons.Contains(RestoreBackupButton));
         ApplyButtonState(DeleteEntryButton, pressed: false, focused: DeleteEntryButton.IsFocused, hovered: _hoveredButtons.Contains(DeleteEntryButton));
 
         StatusBadge.Text = _vaultSession.State switch
@@ -948,6 +1079,7 @@ public partial class MainPage : ContentPage
             VaultError.UnsupportedVaultFeatures => "This vault contains unsupported KeePass features.",
             VaultError.BackupFailed => "Vault backup could not be created. Save was stopped.",
             VaultError.ConflictCopyFailed => "Vault changed on disk and the conflict copy could not be created.",
+            VaultError.RestoreFailed => "Vault could not be restored.",
             VaultError.OpenFailed => "Vault could not be opened. Check the password.",
             VaultError.SaveFailed => "Vault could not be saved.",
             _ => message ?? "Operation failed."
@@ -976,4 +1108,24 @@ public partial class MainPage : ContentPage
         Color Text,
         Color DisabledBackground,
         Color DisabledText);
+
+    private sealed class BackupArtifactViewModel
+    {
+        public BackupArtifactViewModel(VaultBackupArtifact artifact)
+        {
+            Artifact = artifact;
+        }
+
+        public VaultBackupArtifact Artifact { get; }
+
+        public string KindLabel => Artifact.Kind == VaultBackupArtifactKind.ConflictCopy
+            ? "Conflict"
+            : "Backup";
+
+        public string CreatedAtLabel => Artifact.CreatedAtUtc.UtcDateTime.ToString(
+            "yyyy-MM-dd HH:mm:ss 'UTC'",
+            System.Globalization.CultureInfo.InvariantCulture);
+
+        public string FileName => Path.GetFileName(Artifact.FilePath);
+    }
 }

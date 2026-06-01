@@ -34,7 +34,15 @@ public interface IVaultSession
 
     VaultOperationResult<IReadOnlyList<AccountEntry>> Search(VaultSearchQuery query);
 
+    Task<VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>> ListBackupArtifactsAsync(
+        CancellationToken cancellationToken = default);
+
     Task<VaultOperationResult> SaveAsync(CancellationToken cancellationToken = default);
+
+    Task<VaultOperationResult> RestoreBackupAsync(
+        string backupPath,
+        string masterPassword,
+        CancellationToken cancellationToken = default);
 
     VaultOperationResult Lock(bool discardUnsavedChanges = false);
 
