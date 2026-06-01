@@ -42,13 +42,13 @@ public sealed class VaultSession : IVaultSession
         var createResult = await _vaultService.CreateAsync(vaultPath, masterPassword, cancellationToken);
         if (!createResult.Succeeded)
         {
-            return createResult;
+            return FailureFrom(createResult);
         }
 
         var loadResult = await _vaultService.LoadAsync(vaultPath, masterPassword, cancellationToken);
         if (!loadResult.Succeeded)
         {
-            return VaultOperationResult.Failure(loadResult.Error, loadResult.Message);
+            return FailureFrom(loadResult);
         }
 
         SetUnlocked(vaultPath, masterPassword, loadResult.Value!);
@@ -224,10 +224,13 @@ public sealed class VaultSession : IVaultSession
             return VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>.Failure(VaultError.BackupFailed);
         }
 
-        return await _vaultBackupService.ListArtifactsAsync(
+        var listResult = await _vaultBackupService.ListArtifactsAsync(
             VaultPath!,
             _vaultBackupOptions,
             cancellationToken);
+        return listResult.Succeeded
+            ? VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>.Success(listResult.Value!)
+            : VaultOperationResult<IReadOnlyList<VaultBackupArtifact>>.Failure(listResult.Error);
     }
 
     public async Task<VaultOperationResult> SaveAsync(CancellationToken cancellationToken = default)
@@ -246,7 +249,7 @@ public sealed class VaultSession : IVaultSession
                 cancellationToken);
             if (!backupResult.Succeeded)
             {
-                return VaultOperationResult.Failure(backupResult.Error, backupResult.Message);
+                return FailureFrom(backupResult);
             }
         }
 
@@ -267,17 +270,17 @@ public sealed class VaultSession : IVaultSession
                     cancellationToken);
                 if (!conflictCopyResult.Succeeded)
                 {
-                    return VaultOperationResult.Failure(conflictCopyResult.Error, conflictCopyResult.Message);
+                    return FailureFrom(conflictCopyResult);
                 }
             }
 
-            return saveResult;
+            return FailureFrom(saveResult);
         }
 
         var reloadResult = await _vaultService.LoadAsync(VaultPath!, _masterPassword!, cancellationToken);
         if (!reloadResult.Succeeded)
         {
-            return VaultOperationResult.Failure(reloadResult.Error, reloadResult.Message);
+            return FailureFrom(reloadResult);
         }
 
         CurrentSnapshot = reloadResult.Value!;
@@ -314,13 +317,13 @@ public sealed class VaultSession : IVaultSession
             cancellationToken);
         if (!restoreResult.Succeeded)
         {
-            return restoreResult;
+            return FailureFrom(restoreResult);
         }
 
         var reloadResult = await _vaultService.LoadAsync(VaultPath!, masterPassword, cancellationToken);
         if (!reloadResult.Succeeded)
         {
-            return VaultOperationResult.Failure(reloadResult.Error, reloadResult.Message);
+            return FailureFrom(reloadResult);
         }
 
         SetUnlocked(VaultPath!, masterPassword, reloadResult.Value!);
@@ -356,7 +359,7 @@ public sealed class VaultSession : IVaultSession
             cancellationToken);
         if (!currentLoadResult.Succeeded)
         {
-            return VaultOperationResult.Failure(currentLoadResult.Error, currentLoadResult.Message);
+            return FailureFrom(currentLoadResult);
         }
 
         if (!string.Equals(
@@ -377,7 +380,7 @@ public sealed class VaultSession : IVaultSession
                 cancellationToken);
             if (!backupResult.Succeeded)
             {
-                return VaultOperationResult.Failure(backupResult.Error, backupResult.Message);
+                return FailureFrom(backupResult);
             }
         }
 
@@ -389,13 +392,13 @@ public sealed class VaultSession : IVaultSession
             cancellationToken);
         if (!changeResult.Succeeded)
         {
-            return changeResult;
+            return FailureFrom(changeResult);
         }
 
         var reloadResult = await _vaultService.LoadAsync(VaultPath!, newMasterPassword, cancellationToken);
         if (!reloadResult.Succeeded)
         {
-            return VaultOperationResult.Failure(reloadResult.Error, reloadResult.Message);
+            return FailureFrom(reloadResult);
         }
 
         SetUnlocked(VaultPath!, newMasterPassword, reloadResult.Value!);
@@ -463,7 +466,7 @@ public sealed class VaultSession : IVaultSession
         var loadResult = await _vaultService.LoadAsync(vaultPath, masterPassword, cancellationToken);
         if (!loadResult.Succeeded)
         {
-            return VaultOperationResult.Failure(loadResult.Error, loadResult.Message);
+            return FailureFrom(loadResult);
         }
 
         SetUnlocked(vaultPath, masterPassword, loadResult.Value!);
@@ -506,5 +509,15 @@ public sealed class VaultSession : IVaultSession
     private static DateTimeOffset LaterOf(DateTimeOffset first, DateTimeOffset second)
     {
         return first >= second ? first : second;
+    }
+
+    private static VaultOperationResult FailureFrom(VaultOperationResult result)
+    {
+        return VaultOperationResult.Failure(result.Error);
+    }
+
+    private static VaultOperationResult FailureFrom<T>(VaultOperationResult<T> result)
+    {
+        return VaultOperationResult.Failure(result.Error);
     }
 }
