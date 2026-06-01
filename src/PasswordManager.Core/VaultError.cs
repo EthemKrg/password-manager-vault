@@ -16,6 +16,8 @@ public enum VaultError
     EntryAlreadyExists,
     UnsupportedVaultFormat,
     UnsupportedVaultFeatures,
+    BackupFailed,
+    ConflictCopyFailed,
     OpenFailed,
     SaveFailed,
     Unknown

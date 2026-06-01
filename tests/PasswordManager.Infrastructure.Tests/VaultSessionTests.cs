@@ -249,6 +249,93 @@ public sealed class VaultSessionTests
     }
 
     [Fact]
+    public async Task SaveAsync_WithBackupServiceCreatesBackupBeforeSave()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot([], "fp-before")));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot([CreateEntry("Reloaded")], "fp-after")));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+        var addResult = session.AddEntry(CreateDraft("GitHub"));
+
+        var saveResult = await session.SaveAsync();
+
+        Assert.True(addResult.Succeeded);
+        Assert.True(saveResult.Succeeded);
+        Assert.Equal([VaultPath], backupService.BackupCalls);
+        Assert.Single(service.SaveCalls);
+        Assert.Empty(backupService.ConflictCopyCalls);
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenBackupFailsDoesNotSaveAndKeepsDirtySnapshot()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        backupService.BackupResults.Enqueue(
+            VaultOperationResult<VaultBackupArtifact>.Failure(VaultError.BackupFailed));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot([], "fp-before")));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+        var addResult = session.AddEntry(CreateDraft("GitHub"));
+
+        var saveResult = await session.SaveAsync();
+
+        Assert.False(saveResult.Succeeded);
+        Assert.Equal(VaultError.BackupFailed, saveResult.Error);
+        Assert.True(session.HasUnsavedChanges);
+        Assert.Equal(addResult.Value!.Id, Assert.Single(session.CurrentSnapshot!.Entries).Id);
+        Assert.Empty(service.SaveCalls);
+        Assert.Empty(backupService.ConflictCopyCalls);
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenStaleSnapshotCreatesConflictCopyAndKeepsDirtySnapshot()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot([], "fp-before")));
+        service.SaveResults.Enqueue(VaultOperationResult.Failure(VaultError.StaleVaultSnapshot));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+        var addResult = session.AddEntry(CreateDraft("GitHub"));
+
+        var saveResult = await session.SaveAsync();
+
+        Assert.False(saveResult.Succeeded);
+        Assert.Equal(VaultError.StaleVaultSnapshot, saveResult.Error);
+        Assert.True(session.HasUnsavedChanges);
+        Assert.Equal(addResult.Value!.Id, Assert.Single(session.CurrentSnapshot!.Entries).Id);
+        Assert.Single(backupService.BackupCalls);
+        var conflictCall = Assert.Single(backupService.ConflictCopyCalls);
+        Assert.Equal(VaultPath, conflictCall.Path);
+        Assert.Equal(MasterPassword, conflictCall.Password);
+        Assert.Equal(addResult.Value.Id, Assert.Single(conflictCall.Snapshot.Entries).Id);
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenConflictCopyFailsReturnsConflictCopyFailedAndKeepsDirtySnapshot()
+    {
+        var service = new FakeVaultService();
+        var backupService = new FakeVaultBackupService();
+        backupService.ConflictCopyResults.Enqueue(
+            VaultOperationResult<VaultBackupArtifact>.Failure(VaultError.ConflictCopyFailed));
+        service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot([], "fp-before")));
+        service.SaveResults.Enqueue(VaultOperationResult.Failure(VaultError.StaleVaultSnapshot));
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        await session.UnlockAsync(VaultPath, MasterPassword);
+        var addResult = session.AddEntry(CreateDraft("GitHub"));
+
+        var saveResult = await session.SaveAsync();
+
+        Assert.False(saveResult.Succeeded);
+        Assert.Equal(VaultError.ConflictCopyFailed, saveResult.Error);
+        Assert.True(session.HasUnsavedChanges);
+        Assert.Equal(addResult.Value!.Id, Assert.Single(session.CurrentSnapshot!.Entries).Id);
+    }
+
+    [Fact]
     public async Task LockAndClose_ProtectUnsavedChangesUnlessDiscarded()
     {
         var session = await CreateUnlockedSession(new VaultSnapshot([], "fp-1"));
@@ -426,6 +513,51 @@ public sealed class VaultSessionTests
             return Task.FromResult(SaveResults.Count > 0
                 ? SaveResults.Dequeue()
                 : VaultOperationResult.Success());
+        }
+    }
+
+    private sealed class FakeVaultBackupService : IVaultBackupService
+    {
+        public Queue<VaultOperationResult<VaultBackupArtifact>> BackupResults { get; } = new();
+
+        public Queue<VaultOperationResult<VaultBackupArtifact>> ConflictCopyResults { get; } = new();
+
+        public List<string> BackupCalls { get; } = [];
+
+        public List<(string Path, string Password, VaultSnapshot Snapshot)> ConflictCopyCalls { get; } = [];
+
+        public Task<VaultOperationResult<VaultBackupArtifact>> CreateBackupAsync(
+            string vaultPath,
+            VaultBackupOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            BackupCalls.Add(vaultPath);
+            return Task.FromResult(BackupResults.Count > 0
+                ? BackupResults.Dequeue()
+                : VaultOperationResult<VaultBackupArtifact>.Success(
+                    new VaultBackupArtifact(
+                        $"{vaultPath}.backup",
+                        VaultBackupArtifactKind.Backup,
+                        SessionStart,
+                        "backup-fp")));
+        }
+
+        public Task<VaultOperationResult<VaultBackupArtifact>> CreateConflictCopyAsync(
+            string vaultPath,
+            string masterPassword,
+            VaultSnapshot snapshot,
+            VaultBackupOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            ConflictCopyCalls.Add((vaultPath, masterPassword, snapshot));
+            return Task.FromResult(ConflictCopyResults.Count > 0
+                ? ConflictCopyResults.Dequeue()
+                : VaultOperationResult<VaultBackupArtifact>.Success(
+                    new VaultBackupArtifact(
+                        $"{vaultPath}.conflict",
+                        VaultBackupArtifactKind.ConflictCopy,
+                        SessionStart,
+                        snapshot.SourceFingerprint)));
         }
     }
 }

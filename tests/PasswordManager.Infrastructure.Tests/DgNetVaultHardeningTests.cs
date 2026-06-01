@@ -191,6 +191,53 @@ public sealed class DgNetVaultHardeningTests
         Assert.Empty(TemporaryFiles(temp));
     }
 
+    [Fact]
+    public async Task VaultSession_SaveAsync_WithBackupServiceCreatesConflictCopyWhenVaultChangedOnDisk()
+    {
+        using var temp = TemporaryVaultDirectory.Create();
+        var vaultPath = temp.GetVaultPath();
+        var service = new DgNetVaultService();
+        var backupService = new FileSystemVaultBackupService(service);
+        var session = new VaultSession(service, vaultBackupService: backupService);
+        var createResult = await session.CreateAsync(vaultPath, MasterPassword);
+        var initialAddResult = session.AddEntry(CreateDraft("Original"));
+        var initialSaveResult = await session.SaveAsync();
+        var externalLoadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var externalSaveResult = await service.SaveAsync(
+            vaultPath,
+            MasterPassword,
+            externalLoadResult.Value!.Update(
+                externalLoadResult.Value.Entries.Single() with
+                {
+                    Notes = "external update"
+                }));
+        var hashAfterExternalSave = await ComputeHashAsync(vaultPath);
+        var dirtyAddResult = session.AddEntry(CreateDraft("LocalDirty"));
+
+        var staleSessionSaveResult = await session.SaveAsync();
+        var finalLoadResult = await service.LoadAsync(vaultPath, MasterPassword);
+        var conflictFiles = Directory.GetFiles(Path.Combine(temp.Path, "backups"), "*_conflict_*.kdbx");
+        var conflictLoadResult = await service.LoadAsync(Assert.Single(conflictFiles), MasterPassword);
+
+        Assert.True(createResult.Succeeded);
+        Assert.True(initialAddResult.Succeeded);
+        Assert.True(initialSaveResult.Succeeded);
+        Assert.True(externalLoadResult.Succeeded);
+        Assert.True(externalSaveResult.Succeeded);
+        Assert.True(dirtyAddResult.Succeeded);
+        Assert.False(staleSessionSaveResult.Succeeded);
+        Assert.Equal(VaultError.StaleVaultSnapshot, staleSessionSaveResult.Error);
+        Assert.Equal(hashAfterExternalSave, await ComputeHashAsync(vaultPath));
+        Assert.Equal(VaultSessionState.Unlocked, session.State);
+        Assert.True(session.HasUnsavedChanges);
+        Assert.True(finalLoadResult.Succeeded);
+        Assert.Equal("external update", Assert.Single(finalLoadResult.Value!.Entries).Notes);
+        Assert.True(conflictLoadResult.Succeeded);
+        Assert.Contains(conflictLoadResult.Value!.Entries, entry => entry.Id == initialAddResult.Value!.Id);
+        Assert.Contains(conflictLoadResult.Value.Entries, entry => entry.Id == dirtyAddResult.Value!.Id);
+        Assert.Empty(TemporaryFiles(temp));
+    }
+
     private static AccountEntryDraft CreateDraft(string serviceName)
     {
         return new AccountEntryDraft(
@@ -227,7 +274,7 @@ public sealed class DgNetVaultHardeningTests
 
     private static IReadOnlyList<string> TemporaryFiles(TemporaryVaultDirectory temp)
     {
-        return Directory.GetFiles(temp.Path, "*.tmp");
+        return Directory.GetFiles(temp.Path, "*.tmp", SearchOption.AllDirectories);
     }
 
     private static void TruncateVaultFile(string vaultPath)
