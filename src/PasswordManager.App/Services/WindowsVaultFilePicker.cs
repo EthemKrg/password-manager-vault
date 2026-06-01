@@ -18,6 +18,7 @@ public sealed class WindowsVaultFilePicker : IVaultFilePicker
 
     public async Task<string?> PickCreateVaultPathAsync()
     {
+        var pickerOpenedAtUtc = DateTimeOffset.UtcNow;
         var picker = new FileSavePicker
         {
             SuggestedFileName = "vault",
@@ -27,7 +28,13 @@ public sealed class WindowsVaultFilePicker : IVaultFilePicker
         picker.FileTypeChoices.Add("KeePass vault", [".kdbx"]);
 
         var file = await picker.PickSaveFileAsync();
-        return file?.Path;
+        if (file is null)
+        {
+            return null;
+        }
+
+        RemoveNewEmptyPickerPlaceholder(file.Path, pickerOpenedAtUtc);
+        return file.Path;
     }
 
     private static void InitializePicker(object picker)
@@ -39,5 +46,28 @@ public sealed class WindowsVaultFilePicker : IVaultFilePicker
         }
 
         InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(platformWindow));
+    }
+
+    private static void RemoveNewEmptyPickerPlaceholder(string path, DateTimeOffset pickerOpenedAtUtc)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return;
+        }
+
+        var fileInfo = new FileInfo(path);
+        fileInfo.Refresh();
+        if (fileInfo.Length != 0)
+        {
+            return;
+        }
+
+        var thresholdUtc = pickerOpenedAtUtc.UtcDateTime.AddSeconds(-5);
+        if (fileInfo.CreationTimeUtc < thresholdUtc && fileInfo.LastWriteTimeUtc < thresholdUtc)
+        {
+            return;
+        }
+
+        File.Delete(path);
     }
 }
