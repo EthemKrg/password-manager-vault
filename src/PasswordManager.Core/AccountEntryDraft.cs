@@ -17,7 +17,8 @@ public sealed record AccountEntryDraft
         string usernameOrEmail,
         string password,
         string notes,
-        IReadOnlyList<string> tags)
+        IReadOnlyList<string> tags,
+        bool isFavorite = false)
     {
         ServiceName = serviceName;
         WebsiteUrl = websiteUrl;
@@ -25,6 +26,7 @@ public sealed record AccountEntryDraft
         Password = password;
         Notes = notes;
         Tags = tags;
+        IsFavorite = isFavorite;
     }
 
     public string ServiceName
@@ -62,6 +64,8 @@ public sealed record AccountEntryDraft
         get => _tags;
         init => _tags = NormalizeTags(value);
     }
+
+    public bool IsFavorite { get; init; }
 
     private static string NormalizeRequired(string? value, string fieldName, bool trim)
     {

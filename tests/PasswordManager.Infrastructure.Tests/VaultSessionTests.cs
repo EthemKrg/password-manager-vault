@@ -8,6 +8,7 @@ public sealed class VaultSessionTests
     private const string VaultPath = "session-test.kdbx";
     private const string MasterPassword = "session master password";
     private const string WrongPassword = "wrong session password";
+    private static readonly DateTimeOffset SessionStart = new(2026, 2, 3, 4, 5, 6, TimeSpan.Zero);
 
     [Fact]
     public void InitialState_IsNoVaultLoaded()
@@ -135,6 +136,58 @@ public sealed class VaultSessionTests
         var deleteResult = session.DeleteEntry(addedEntry.Id);
         Assert.True(deleteResult.Succeeded);
         Assert.Empty(session.CurrentSnapshot.Entries);
+    }
+
+    [Fact]
+    public async Task AddEntry_UsesSessionTimeProviderForEntryMetadata()
+    {
+        var timeProvider = new ManualTimeProvider(SessionStart);
+        var session = await CreateUnlockedSession(new VaultSnapshot([], "fp-1"), timeProvider);
+
+        var addResult = session.AddEntry(CreateDraft("GitHub"));
+
+        Assert.True(addResult.Succeeded);
+        Assert.Equal(SessionStart, addResult.Value!.CreatedAtUtc);
+        Assert.Equal(SessionStart, addResult.Value.UpdatedAtUtc);
+        Assert.Equal(SessionStart, addResult.Value.PasswordChangedAtUtc);
+    }
+
+    [Fact]
+    public async Task UpdateEntry_RefreshesUpdatedTimestampAndOnlyChangesPasswordTimestampWhenPasswordChanges()
+    {
+        var timeProvider = new ManualTimeProvider(SessionStart);
+        var session = await CreateUnlockedSession(new VaultSnapshot([], "fp-1"), timeProvider);
+        var addResult = session.AddEntry(CreateDraft("GitHub"));
+        var addedEntry = addResult.Value!;
+
+        var metadataOnlyUpdateTime = SessionStart.AddMinutes(5);
+        timeProvider.SetUtcNow(metadataOnlyUpdateTime);
+        var metadataOnlyUpdateResult = session.UpdateEntry(addedEntry with
+        {
+            Notes = "updated notes",
+            IsFavorite = true
+        });
+        var metadataOnlyUpdatedEntry = Assert.Single(session.CurrentSnapshot!.Entries);
+
+        var passwordUpdateTime = SessionStart.AddMinutes(10);
+        timeProvider.SetUtcNow(passwordUpdateTime);
+        var passwordUpdateResult = session.UpdateEntry(metadataOnlyUpdatedEntry with
+        {
+            Password = "new-password-for-github"
+        });
+        var passwordUpdatedEntry = Assert.Single(session.CurrentSnapshot.Entries);
+
+        Assert.True(addResult.Succeeded);
+        Assert.True(metadataOnlyUpdateResult.Succeeded);
+        Assert.Equal(SessionStart, metadataOnlyUpdatedEntry.CreatedAtUtc);
+        Assert.Equal(metadataOnlyUpdateTime, metadataOnlyUpdatedEntry.UpdatedAtUtc);
+        Assert.Equal(SessionStart, metadataOnlyUpdatedEntry.PasswordChangedAtUtc);
+        Assert.True(metadataOnlyUpdatedEntry.IsFavorite);
+
+        Assert.True(passwordUpdateResult.Succeeded);
+        Assert.Equal(SessionStart, passwordUpdatedEntry.CreatedAtUtc);
+        Assert.Equal(passwordUpdateTime, passwordUpdatedEntry.UpdatedAtUtc);
+        Assert.Equal(passwordUpdateTime, passwordUpdatedEntry.PasswordChangedAtUtc);
     }
 
     [Fact]
@@ -284,11 +337,13 @@ public sealed class VaultSessionTests
         Assert.False(session.HasUnsavedChanges);
     }
 
-    private static async Task<VaultSession> CreateUnlockedSession(VaultSnapshot snapshot)
+    private static async Task<VaultSession> CreateUnlockedSession(
+        VaultSnapshot snapshot,
+        TimeProvider? timeProvider = null)
     {
         var service = new FakeVaultService();
         service.LoadResults.Enqueue(VaultOperationResult<VaultSnapshot>.Success(snapshot));
-        var session = new VaultSession(service);
+        var session = new VaultSession(service, timeProvider);
         var result = await session.UnlockAsync(VaultPath, MasterPassword);
         Assert.True(result.Succeeded);
         return session;
@@ -307,7 +362,22 @@ public sealed class VaultSessionTests
 
     private static AccountEntry CreateEntry(string serviceName)
     {
-        return AccountEntry.Create(CreateDraft(serviceName));
+        return AccountEntry.Create(CreateDraft(serviceName), SessionStart);
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            return _utcNow;
+        }
+
+        public void SetUtcNow(DateTimeOffset utcNow)
+        {
+            _utcNow = utcNow;
+        }
     }
 
     private sealed class FakeVaultService : IVaultService

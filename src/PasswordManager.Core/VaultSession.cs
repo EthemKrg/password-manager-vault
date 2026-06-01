@@ -3,11 +3,13 @@ namespace PasswordManager.Core;
 public sealed class VaultSession : IVaultSession
 {
     private readonly IVaultService _vaultService;
+    private readonly TimeProvider _timeProvider;
     private string? _masterPassword;
 
-    public VaultSession(IVaultService vaultService)
+    public VaultSession(IVaultService vaultService, TimeProvider? timeProvider = null)
     {
         _vaultService = vaultService ?? throw new ArgumentNullException(nameof(vaultService));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public VaultSessionState State { get; private set; } = VaultSessionState.NoVaultLoaded;
@@ -86,7 +88,7 @@ public sealed class VaultSession : IVaultSession
 
         try
         {
-            var entry = AccountEntry.Create(draft);
+            var entry = AccountEntry.Create(draft, _timeProvider.GetUtcNow());
             var addResult = AddEntryToCurrentSnapshot(entry);
             return addResult.Succeeded
                 ? VaultOperationResult<AccountEntry>.Success(entry)
@@ -123,7 +125,33 @@ public sealed class VaultSession : IVaultSession
 
         try
         {
-            CurrentSnapshot = CurrentSnapshot!.Update(entry);
+            var existingEntry = CurrentSnapshot!.Entries.SingleOrDefault(existing => existing.Id == entry.Id);
+            if (existingEntry is null)
+            {
+                return VaultOperationResult.Failure(VaultError.EntryNotFound, nameof(KeyNotFoundException));
+            }
+
+            var updatedAtUtc = LaterOf(_timeProvider.GetUtcNow(), existingEntry.UpdatedAtUtc);
+            var passwordChangedAtUtc = string.Equals(
+                existingEntry.Password,
+                entry.Password,
+                StringComparison.Ordinal)
+                ? existingEntry.PasswordChangedAtUtc
+                : updatedAtUtc;
+            var updatedEntry = new AccountEntry(
+                entry.Id,
+                entry.ServiceName,
+                entry.WebsiteUrl,
+                entry.UsernameOrEmail,
+                entry.Password,
+                entry.Notes,
+                entry.Tags,
+                entry.IsFavorite,
+                existingEntry.CreatedAtUtc,
+                updatedAtUtc,
+                passwordChangedAtUtc);
+
+            CurrentSnapshot = CurrentSnapshot.Update(updatedEntry);
             HasUnsavedChanges = true;
             return VaultOperationResult.Success();
         }
@@ -300,5 +328,10 @@ public sealed class VaultSession : IVaultSession
         return HasUnsavedChanges && !discardUnsavedChanges
             ? VaultOperationResult.Failure(VaultError.UnsavedChanges)
             : null;
+    }
+
+    private static DateTimeOffset LaterOf(DateTimeOffset first, DateTimeOffset second)
+    {
+        return first >= second ? first : second;
     }
 }

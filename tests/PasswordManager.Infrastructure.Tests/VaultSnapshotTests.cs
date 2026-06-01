@@ -4,6 +4,8 @@ namespace PasswordManager.Infrastructure.Tests;
 
 public sealed class VaultSnapshotTests
 {
+    private static readonly DateTimeOffset TestTimestamp = new(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
+
     [Fact]
     public void AddUpdateDelete_ManageEntriesWithoutMutatingOriginalSnapshot()
     {
@@ -85,7 +87,11 @@ public sealed class VaultSnapshotTests
             "",
             "password",
             "",
-            []));
+            [],
+            false,
+            TestTimestamp,
+            TestTimestamp,
+            TestTimestamp));
         Assert.Throws<ArgumentException>(() => entry with { Id = Guid.Empty });
         Assert.Throws<ArgumentException>(() => new AccountEntryDraft(
             " ",
@@ -115,6 +121,92 @@ public sealed class VaultSnapshotTests
             "password",
             "",
             new List<string?> { "valid", null! }!));
+    }
+
+    [Fact]
+    public void AccountEntryCreate_SetsFavoriteAndTimestampsFromDraft()
+    {
+        var defaultDraft = new AccountEntryDraft(
+            "Default",
+            "",
+            "",
+            "password",
+            "",
+            []);
+        var favoriteDraft = new AccountEntryDraft(
+            "Favorite",
+            "",
+            "",
+            "password",
+            "",
+            [],
+            isFavorite: true);
+
+        var defaultEntry = AccountEntry.Create(defaultDraft, TestTimestamp);
+        var favoriteEntry = AccountEntry.Create(favoriteDraft, TestTimestamp);
+
+        Assert.False(defaultEntry.IsFavorite);
+        Assert.True(favoriteEntry.IsFavorite);
+        Assert.Equal(TestTimestamp, favoriteEntry.CreatedAtUtc);
+        Assert.Equal(TestTimestamp, favoriteEntry.UpdatedAtUtc);
+        Assert.Equal(TestTimestamp, favoriteEntry.PasswordChangedAtUtc);
+    }
+
+    [Fact]
+    public void AccountEntry_RejectsInvalidMetadataTimestamps()
+    {
+        var createdAtUtc = TestTimestamp;
+        var passwordChangedAtUtc = createdAtUtc.AddMinutes(1);
+        var updatedAtUtc = passwordChangedAtUtc.AddMinutes(1);
+
+        Assert.Throws<ArgumentException>(() => new AccountEntry(
+            Guid.NewGuid(),
+            "Example",
+            "",
+            "",
+            "password",
+            "",
+            [],
+            false,
+            default,
+            updatedAtUtc,
+            passwordChangedAtUtc));
+        Assert.Throws<ArgumentException>(() => new AccountEntry(
+            Guid.NewGuid(),
+            "Example",
+            "",
+            "",
+            "password",
+            "",
+            [],
+            false,
+            createdAtUtc.ToOffset(TimeSpan.FromHours(3)),
+            updatedAtUtc,
+            passwordChangedAtUtc));
+        Assert.Throws<ArgumentException>(() => new AccountEntry(
+            Guid.NewGuid(),
+            "Example",
+            "",
+            "",
+            "password",
+            "",
+            [],
+            false,
+            passwordChangedAtUtc,
+            updatedAtUtc,
+            createdAtUtc));
+        Assert.Throws<ArgumentException>(() => new AccountEntry(
+            Guid.NewGuid(),
+            "Example",
+            "",
+            "",
+            "password",
+            "",
+            [],
+            false,
+            createdAtUtc,
+            createdAtUtc,
+            passwordChangedAtUtc));
     }
 
     [Fact]

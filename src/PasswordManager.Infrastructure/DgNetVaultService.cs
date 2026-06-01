@@ -1,5 +1,6 @@
 using DgNet.Keepass;
 using PasswordManager.Core;
+using System.Globalization;
 using System.Security.Cryptography;
 
 namespace PasswordManager.Infrastructure;
@@ -9,6 +10,12 @@ public sealed class DgNetVaultService : IVaultService
     private const char TagSeparator = ';';
     private const string AppVaultName = "Password Manager Vault";
     private const string AppVaultMarker = "PasswordManagerVault:v1";
+    private const string AppFavoriteKey = "PMV.IsFavorite";
+    private const string AppCreatedAtKey = "PMV.CreatedAtUtc";
+    private const string AppUpdatedAtKey = "PMV.UpdatedAtUtc";
+    private const string AppPasswordChangedAtKey = "PMV.PasswordChangedAtUtc";
+    private const string TrueValue = "true";
+    private const string FalseValue = "false";
     private const int DefaultHistoryMaxItems = 10;
     private const long DefaultHistoryMaxSize = 6_291_456;
     private static readonly HashSet<string> StandardEntryStringKeys = new(StringComparer.OrdinalIgnoreCase)
@@ -18,6 +25,13 @@ public sealed class DgNetVaultService : IVaultService
         "Password",
         "URL",
         "Notes"
+    };
+    private static readonly HashSet<string> AppEntryStringKeys = new(StringComparer.Ordinal)
+    {
+        AppFavoriteKey,
+        AppCreatedAtKey,
+        AppUpdatedAtKey,
+        AppPasswordChangedAtKey
     };
 
     public async Task<VaultOperationResult> CreateAsync(
@@ -83,7 +97,8 @@ public sealed class DgNetVaultService : IVaultService
                     "Vault changed while it was being loaded.");
             }
 
-            var supportResult = ValidateAppManagedDatabase(database);
+            var metadataFallbackTimestamp = DateTimeOffset.UtcNow;
+            var supportResult = ValidateAppManagedDatabase(database, metadataFallbackTimestamp);
             if (supportResult is not null)
             {
                 return VaultOperationResult<VaultSnapshot>.Failure(supportResult.Error, supportResult.Message);
@@ -91,7 +106,7 @@ public sealed class DgNetVaultService : IVaultService
 
             var entries = database.RootGroup
                 .FindAllEntries(_ => true)
-                .Select(MapEntry)
+                .Select(entry => MapEntry(entry, metadataFallbackTimestamp))
                 .ToArray();
 
             return VaultOperationResult<VaultSnapshot>.Success(new VaultSnapshot(entries, fingerprintAfterOpen));
@@ -163,8 +178,13 @@ public sealed class DgNetVaultService : IVaultService
         return AccountEntry.Create(draft);
     }
 
-    private static AccountEntry MapEntry(Entry entry)
+    private static AccountEntry MapEntry(Entry entry, DateTimeOffset metadataFallbackTimestamp)
     {
+        if (!TryReadAppEntryMetadata(entry, metadataFallbackTimestamp, out var metadata))
+        {
+            throw new ArgumentException("Entry metadata is invalid.", nameof(entry));
+        }
+
         return new AccountEntry(
             entry.Uuid,
             entry.Title,
@@ -172,12 +192,16 @@ public sealed class DgNetVaultService : IVaultService
             entry.UserName,
             entry.Password,
             entry.Notes,
-            SplitTags(entry.Tags));
+            SplitTags(entry.Tags),
+            metadata.IsFavorite,
+            metadata.CreatedAtUtc,
+            metadata.UpdatedAtUtc,
+            metadata.PasswordChangedAtUtc);
     }
 
     private static Entry MapEntry(AccountEntry account)
     {
-        return new Entry
+        var entry = new Entry
         {
             Uuid = account.Id,
             Title = account.ServiceName,
@@ -185,8 +209,34 @@ public sealed class DgNetVaultService : IVaultService
             UserName = account.UsernameOrEmail,
             Password = account.Password,
             Notes = account.Notes,
-            Tags = string.Join(TagSeparator, NormalizeTags(account.Tags))
+            Tags = string.Join(TagSeparator, NormalizeTags(account.Tags)),
+            Times = new Times
+            {
+                CreationTime = account.CreatedAtUtc.UtcDateTime,
+                LastModificationTime = account.UpdatedAtUtc.UtcDateTime
+            }
         };
+
+        SetAppEntryString(entry, AppFavoriteKey, account.IsFavorite ? TrueValue : FalseValue);
+        SetAppEntryString(entry, AppCreatedAtKey, SerializeTimestamp(account.CreatedAtUtc));
+        SetAppEntryString(entry, AppUpdatedAtKey, SerializeTimestamp(account.UpdatedAtUtc));
+        SetAppEntryString(entry, AppPasswordChangedAtKey, SerializeTimestamp(account.PasswordChangedAtUtc));
+
+        return entry;
+    }
+
+    private static void SetAppEntryString(Entry entry, string key, string value)
+    {
+        entry.Strings[key] = new EntryString
+        {
+            Value = value,
+            Protected = false
+        };
+    }
+
+    private static string SerializeTimestamp(DateTimeOffset timestamp)
+    {
+        return timestamp.ToString("O", CultureInfo.InvariantCulture);
     }
 
     private static IReadOnlyList<string> NormalizeTags(IEnumerable<string> tags)
@@ -269,7 +319,7 @@ public sealed class DgNetVaultService : IVaultService
                     "Vault changed while it was being validated.");
             }
 
-            var supportResult = ValidateAppManagedDatabase(existingDatabase);
+            var supportResult = ValidateAppManagedDatabase(existingDatabase, DateTimeOffset.UtcNow);
             if (supportResult is not null)
             {
                 return supportResult;
@@ -290,14 +340,16 @@ public sealed class DgNetVaultService : IVaultService
         }
     }
 
-    private static VaultOperationResult? ValidateAppManagedDatabase(Database database)
+    private static VaultOperationResult? ValidateAppManagedDatabase(
+        Database database,
+        DateTimeOffset metadataFallbackTimestamp)
     {
         if (!IsAppManagedDatabase(database))
         {
             return VaultOperationResult.Failure(VaultError.UnsupportedVaultFormat);
         }
 
-        if (HasUnsupportedFeatures(database))
+        if (HasUnsupportedFeatures(database, metadataFallbackTimestamp))
         {
             return VaultOperationResult.Failure(VaultError.UnsupportedVaultFeatures);
         }
@@ -317,7 +369,7 @@ public sealed class DgNetVaultService : IVaultService
             && string.Equals(database.Metadata.Description, AppVaultMarker, StringComparison.Ordinal);
     }
 
-    private static bool HasUnsupportedFeatures(Database database)
+    private static bool HasUnsupportedFeatures(Database database, DateTimeOffset metadataFallbackTimestamp)
     {
         if (HasUnsupportedMetadata(database.Metadata) || HasUnsupportedRootGroupFeatures(database.RootGroup))
         {
@@ -326,7 +378,7 @@ public sealed class DgNetVaultService : IVaultService
 
         return database.RootGroup
             .FindAllEntries(_ => true)
-            .Any(HasUnsupportedEntryFeatures);
+            .Any(entry => HasUnsupportedEntryFeatures(entry, metadataFallbackTimestamp));
     }
 
     private static bool HasUnsupportedMetadata(Metadata metadata)
@@ -352,7 +404,7 @@ public sealed class DgNetVaultService : IVaultService
             || HasUnsupportedTimes(rootGroup.Times);
     }
 
-    private static bool HasUnsupportedEntryFeatures(Entry entry)
+    private static bool HasUnsupportedEntryFeatures(Entry entry, DateTimeOffset metadataFallbackTimestamp)
     {
         return entry.IconId != 0
             || entry.CustomIconUuid != Guid.Empty
@@ -362,6 +414,7 @@ public sealed class DgNetVaultService : IVaultService
             || HasUnsupportedTimes(entry.Times)
             || HasUnsupportedAutoType(entry.AutoType)
             || HasUnsupportedEntryStrings(entry)
+            || HasInvalidAppEntryMetadata(entry, metadataFallbackTimestamp)
             || entry.History.Count > 0
             || entry.Binaries.Count > 0;
     }
@@ -385,7 +438,7 @@ public sealed class DgNetVaultService : IVaultService
 
     private static bool HasUnsupportedEntryStrings(Entry entry)
     {
-        if (entry.Strings.Keys.Any(key => !StandardEntryStringKeys.Contains(key)))
+        if (entry.Strings.Keys.Any(key => !IsSupportedEntryStringKey(key)))
         {
             return true;
         }
@@ -394,7 +447,8 @@ public sealed class DgNetVaultService : IVaultService
             || HasUnexpectedProtection(entry, "UserName", protectedValue: false)
             || HasUnexpectedProtection(entry, "Password", protectedValue: true)
             || HasUnexpectedProtection(entry, "URL", protectedValue: false)
-            || HasUnexpectedProtection(entry, "Notes", protectedValue: false);
+            || HasUnexpectedProtection(entry, "Notes", protectedValue: false)
+            || AppEntryStringKeys.Any(key => HasUnexpectedProtection(entry, key, protectedValue: false));
     }
 
     private static bool HasUnexpectedProtection(Entry entry, string key, bool protectedValue)
@@ -402,6 +456,118 @@ public sealed class DgNetVaultService : IVaultService
         return entry.Strings.TryGetValue(key, out var value)
             && value.Protected != protectedValue;
     }
+
+    private static bool IsSupportedEntryStringKey(string key)
+    {
+        return StandardEntryStringKeys.Contains(key) || AppEntryStringKeys.Contains(key);
+    }
+
+    private static bool HasInvalidAppEntryMetadata(Entry entry, DateTimeOffset metadataFallbackTimestamp)
+    {
+        return !TryReadAppEntryMetadata(entry, metadataFallbackTimestamp, out _);
+    }
+
+    private static bool TryReadAppEntryMetadata(
+        Entry entry,
+        DateTimeOffset fallbackTimestamp,
+        out AppEntryMetadata metadata)
+    {
+        metadata = default;
+
+        if (!TryReadAppFavorite(entry, out var isFavorite)
+            || !TryReadAppTimestamp(
+                entry,
+                AppCreatedAtKey,
+                TimestampFromKeePass(entry.Times.CreationTime, fallbackTimestamp),
+                out var createdAtUtc)
+            || !TryReadAppTimestamp(
+                entry,
+                AppUpdatedAtKey,
+                TimestampFromKeePass(entry.Times.LastModificationTime, createdAtUtc),
+                out var updatedAtUtc)
+            || !TryReadAppTimestamp(
+                entry,
+                AppPasswordChangedAtKey,
+                updatedAtUtc,
+                out var passwordChangedAtUtc)
+            || createdAtUtc > passwordChangedAtUtc
+            || passwordChangedAtUtc > updatedAtUtc)
+        {
+            return false;
+        }
+
+        metadata = new AppEntryMetadata(isFavorite, createdAtUtc, updatedAtUtc, passwordChangedAtUtc);
+        return true;
+    }
+
+    private static bool TryReadAppFavorite(Entry entry, out bool isFavorite)
+    {
+        isFavorite = false;
+
+        if (!entry.Strings.TryGetValue(AppFavoriteKey, out var entryString))
+        {
+            return true;
+        }
+
+        if (entryString.Value == TrueValue)
+        {
+            isFavorite = true;
+            return true;
+        }
+
+        if (entryString.Value == FalseValue)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadAppTimestamp(
+        Entry entry,
+        string key,
+        DateTimeOffset fallbackTimestamp,
+        out DateTimeOffset timestamp)
+    {
+        timestamp = fallbackTimestamp;
+
+        return !entry.Strings.TryGetValue(key, out var entryString)
+            || TryParseTimestamp(entryString.Value, out timestamp);
+    }
+
+    private static bool TryParseTimestamp(string? value, out DateTimeOffset timestamp)
+    {
+        if (!DateTimeOffset.TryParseExact(
+                value,
+                "O",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out timestamp))
+        {
+            return false;
+        }
+
+        return timestamp != default && timestamp.Offset == TimeSpan.Zero;
+    }
+
+    private static DateTimeOffset TimestampFromKeePass(DateTime timestamp, DateTimeOffset fallbackTimestamp)
+    {
+        if (timestamp == default)
+        {
+            return fallbackTimestamp;
+        }
+
+        var utcTimestamp = timestamp.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(timestamp, DateTimeKind.Utc)
+            : timestamp.ToUniversalTime();
+        return new DateTimeOffset(utcTimestamp);
+    }
+
+    private readonly record struct AppEntryMetadata(
+        bool IsFavorite,
+        DateTimeOffset CreatedAtUtc,
+        DateTimeOffset UpdatedAtUtc,
+        DateTimeOffset PasswordChangedAtUtc);
 
     private static async Task<string> ComputeVaultFingerprintAsync(
         string vaultPath,
