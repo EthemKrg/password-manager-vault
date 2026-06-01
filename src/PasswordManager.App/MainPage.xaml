@@ -197,6 +197,77 @@
                                 Unfocused="OnButtonUnfocused"
                                 Clicked="OnChooseAnotherVaultClicked" />
                     </Grid>
+                    <Button x:Name="AnalyzeExternalVaultButton"
+                            Text="Analyze external vault"
+                            Style="{StaticResource SecondaryButton}"
+                            Pressed="OnButtonPressed"
+                            Released="OnButtonReleased"
+                            Focused="OnButtonFocused"
+                            Unfocused="OnButtonUnfocused"
+                            Clicked="OnAnalyzeExternalVaultClicked" />
+                    <BoxView x:Name="ExternalAnalysisDivider"
+                             HeightRequest="1"
+                             Color="#D5D9D0"
+                             IsVisible="False" />
+                    <VerticalStackLayout x:Name="ExternalAnalysisPanel"
+                                         Spacing="8"
+                                         IsVisible="False">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="10">
+                            <Label x:Name="ExternalAnalysisTitleLabel"
+                                   FontSize="14"
+                                   FontAttributes="Bold"
+                                   TextColor="#20231F"
+                                   LineBreakMode="TailTruncation" />
+                            <Label x:Name="ExternalAnalysisBadgeLabel"
+                                   Grid.Column="1"
+                                   FontSize="12"
+                                   FontAttributes="Bold"
+                                   TextColor="#1F7A5C"
+                                   VerticalOptions="Center" />
+                        </Grid>
+                        <Label x:Name="ExternalAnalysisSummaryLabel"
+                               FontSize="13"
+                               TextColor="#596157" />
+                        <Label x:Name="ExternalAnalysisIssuesLabel"
+                               FontSize="12"
+                               TextColor="#7B4A16" />
+                        <CollectionView x:Name="ExternalPreviewCollection"
+                                        HeightRequest="170"
+                                        SelectionMode="None"
+                                        IsVisible="False">
+                            <CollectionView.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,0,8"
+                                            Padding="10"
+                                            BackgroundColor="#F9FAF7"
+                                            Stroke="#D5D9D0"
+                                            StrokeThickness="1">
+                                        <Border.StrokeShape>
+                                            <RoundRectangle CornerRadius="8" />
+                                        </Border.StrokeShape>
+                                        <Grid RowDefinitions="Auto,Auto,Auto"
+                                              RowSpacing="3">
+                                            <Label Text="{Binding ServiceLabel}"
+                                                   FontAttributes="Bold"
+                                                   TextColor="#20231F"
+                                                   LineBreakMode="TailTruncation" />
+                                            <Label Grid.Row="1"
+                                                   Text="{Binding UsernameLabel}"
+                                                   FontSize="12"
+                                                   TextColor="#596157"
+                                                   LineBreakMode="TailTruncation" />
+                                            <Label Grid.Row="2"
+                                                   Text="{Binding SignalsLabel}"
+                                                   FontSize="11"
+                                                   TextColor="#596157"
+                                                   LineBreakMode="TailTruncation" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </CollectionView.ItemTemplate>
+                        </CollectionView>
+                    </VerticalStackLayout>
                 </VerticalStackLayout>
             </Border>
 

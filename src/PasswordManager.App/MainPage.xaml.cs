@@ -8,12 +8,15 @@ public partial class MainPage : ContentPage
 {
     private static readonly TimeSpan ClipboardClearDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PasswordRevealDelay = TimeSpan.FromSeconds(20);
+    private const int ExternalPreviewLimit = 25;
 
     private readonly IVaultSession _vaultSession;
+    private readonly IExternalVaultAnalyzer _externalVaultAnalyzer;
     private readonly IVaultFilePicker _filePicker;
     private readonly IClipboardService _clipboardService;
     private readonly ObservableCollection<AccountEntry> _entries = [];
     private readonly ObservableCollection<BackupArtifactViewModel> _backupArtifacts = [];
+    private readonly ObservableCollection<ExternalPreviewViewModel> _externalPreviewEntries = [];
     private AccountEntry? _selectedEntry;
     private BackupArtifactViewModel? _selectedBackupArtifact;
     private string? _pendingVaultPath;
@@ -21,17 +24,24 @@ public partial class MainPage : ContentPage
     private CancellationTokenSource? _clipboardCountdownCancellation;
     private CancellationTokenSource? _passwordRevealCancellation;
     private readonly HashSet<Button> _hoveredButtons = [];
+    private bool _hasExternalAnalysis;
     private bool _isUpdatingRevealState;
     private bool _isBusy;
 
-    public MainPage(IVaultSession vaultSession, IVaultFilePicker filePicker, IClipboardService clipboardService)
+    public MainPage(
+        IVaultSession vaultSession,
+        IExternalVaultAnalyzer externalVaultAnalyzer,
+        IVaultFilePicker filePicker,
+        IClipboardService clipboardService)
     {
         InitializeComponent();
         _vaultSession = vaultSession;
+        _externalVaultAnalyzer = externalVaultAnalyzer;
         _filePicker = filePicker;
         _clipboardService = clipboardService;
         EntryCollection.ItemsSource = _entries;
         BackupCollection.ItemsSource = _backupArtifacts;
+        ExternalPreviewCollection.ItemsSource = _externalPreviewEntries;
         AttachButtonHoverHandlers(this);
         UpdateUi();
     }
@@ -75,6 +85,7 @@ public partial class MainPage : ContentPage
             }
 
             _pendingVaultPath = null;
+            ClearExternalAnalysis();
             ClearEntryForm();
             RefreshEntries();
             await RefreshBackupArtifactsAsync(showFeedback: false);
@@ -104,6 +115,7 @@ public partial class MainPage : ContentPage
 
             _pendingVaultPath = vaultPath;
             UnlockPasswordEntry.Text = string.Empty;
+            ClearExternalAnalysis();
             SetFeedback("Vault selected. Enter the master password.");
         }
         finally
@@ -122,10 +134,16 @@ public partial class MainPage : ContentPage
         await UnlockSelectedVaultAsync();
     }
 
+    private async void OnAnalyzeExternalVaultClicked(object? sender, EventArgs e)
+    {
+        await AnalyzeSelectedExternalVaultAsync();
+    }
+
     private void OnChooseAnotherVaultClicked(object? sender, EventArgs e)
     {
         _pendingVaultPath = null;
         UnlockPasswordEntry.Text = string.Empty;
+        ClearExternalAnalysis();
         SetFeedback("Choose a vault to open.");
         UpdateUi();
     }
@@ -325,6 +343,7 @@ public partial class MainPage : ContentPage
                 return;
             }
 
+            ClearExternalAnalysis();
             var result = _vaultSession.State == VaultSessionState.Locked
                 ? await _vaultSession.UnlockCurrentAsync(masterPassword)
                 : await _vaultSession.UnlockAsync(_pendingVaultPath ?? string.Empty, masterPassword);
@@ -332,7 +351,9 @@ public partial class MainPage : ContentPage
 
             if (!result.Succeeded)
             {
-                SetFeedback(Describe(result));
+                SetFeedback(IsExternalVaultFailure(result.Error)
+                    ? "This vault is not app-managed. Use read-only analysis before any import decision."
+                    : Describe(result));
                 return;
             }
 
@@ -340,6 +361,53 @@ public partial class MainPage : ContentPage
             RefreshEntries();
             await RefreshBackupArtifactsAsync(showFeedback: false);
             SetFeedback("Vault unlocked.");
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    private async Task AnalyzeSelectedExternalVaultAsync()
+    {
+        if (!TryBeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_pendingVaultPath))
+            {
+                SetFeedback("Choose an external vault first.");
+                return;
+            }
+
+            var masterPassword = UnlockPasswordEntry.Text ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(masterPassword))
+            {
+                SetFeedback("Master password is required to analyze.");
+                return;
+            }
+
+            var result = await _externalVaultAnalyzer.AnalyzeAsync(_pendingVaultPath, masterPassword);
+            UnlockPasswordEntry.Text = string.Empty;
+
+            if (!result.Succeeded)
+            {
+                ClearExternalAnalysis();
+                SetFeedback(Describe(result));
+                return;
+            }
+
+            RenderExternalAnalysis(result.Value!);
+            SetFeedback(result.Value!.Kind switch
+            {
+                ExternalVaultAnalysisKind.AppManaged => "This is an app-managed vault. Use normal unlock.",
+                ExternalVaultAnalysisKind.ExternalReadable when result.Value.CanStrictImport => "External vault analyzed. Strict import candidate.",
+                ExternalVaultAnalysisKind.ExternalReadable => "External vault analyzed. Import is blocked until unsupported data is handled.",
+                _ => "External vault could not be read by the current provider."
+            });
         }
         finally
         {
@@ -377,6 +445,7 @@ public partial class MainPage : ContentPage
             _pendingVaultPath = null;
             _selectedEntry = null;
             _selectedBackupArtifact = null;
+            ClearExternalAnalysis();
             EntryCollection.SelectedItem = null;
             BackupCollection.SelectedItem = null;
             RestorePasswordEntry.Text = string.Empty;
@@ -837,6 +906,45 @@ public partial class MainPage : ContentPage
         UpdateUi();
     }
 
+    private void RenderExternalAnalysis(ExternalVaultAnalysis analysis)
+    {
+        _hasExternalAnalysis = true;
+        _externalPreviewEntries.Clear();
+
+        foreach (var entry in analysis.Entries.Take(ExternalPreviewLimit))
+        {
+            _externalPreviewEntries.Add(new ExternalPreviewViewModel(entry));
+        }
+
+        ExternalAnalysisTitleLabel.Text = analysis.Kind switch
+        {
+            ExternalVaultAnalysisKind.AppManaged => "App-managed vault",
+            ExternalVaultAnalysisKind.ExternalReadable => "External KeePass preview",
+            _ => "Unreadable external vault"
+        };
+        ExternalAnalysisBadgeLabel.Text = analysis.Kind switch
+        {
+            ExternalVaultAnalysisKind.AppManaged => "Normal open",
+            ExternalVaultAnalysisKind.ExternalReadable when analysis.CanStrictImport => "Strict import ready",
+            ExternalVaultAnalysisKind.ExternalReadable => "Import blocked",
+            _ => "Read failed"
+        };
+        ExternalAnalysisSummaryLabel.Text = DescribeExternalAnalysisSummary(analysis);
+        ExternalAnalysisIssuesLabel.Text = DescribeExternalIssues(analysis.Issues);
+
+        UpdateUi();
+    }
+
+    private void ClearExternalAnalysis()
+    {
+        _hasExternalAnalysis = false;
+        _externalPreviewEntries.Clear();
+        ExternalAnalysisTitleLabel.Text = string.Empty;
+        ExternalAnalysisBadgeLabel.Text = string.Empty;
+        ExternalAnalysisSummaryLabel.Text = string.Empty;
+        ExternalAnalysisIssuesLabel.Text = string.Empty;
+    }
+
     private void RenderSelectedEntry()
     {
         if (_selectedEntry is null)
@@ -894,9 +1002,15 @@ public partial class MainPage : ContentPage
         RestoreBackupButton.IsEnabled = isUnlocked && !_vaultSession.HasUnsavedChanges && _selectedBackupArtifact is not null;
         EmptyListLabel.IsVisible = isUnlocked && _entries.Count == 0;
         EmptyBackupsLabel.IsVisible = isUnlocked && _backupArtifacts.Count == 0;
+        AnalyzeExternalVaultButton.IsVisible = !isUnlocked && hasPendingOpen && !isLocked;
+        AnalyzeExternalVaultButton.IsEnabled = hasPendingOpen && !isLocked;
+        ExternalAnalysisDivider.IsVisible = !isUnlocked && _hasExternalAnalysis;
+        ExternalAnalysisPanel.IsVisible = !isUnlocked && _hasExternalAnalysis;
+        ExternalPreviewCollection.IsVisible = _hasExternalAnalysis && _externalPreviewEntries.Count > 0;
         ApplyButtonState(SaveVaultButton, pressed: false, focused: SaveVaultButton.IsFocused, hovered: _hoveredButtons.Contains(SaveVaultButton));
         ApplyButtonState(RefreshBackupsButton, pressed: false, focused: RefreshBackupsButton.IsFocused, hovered: _hoveredButtons.Contains(RefreshBackupsButton));
         ApplyButtonState(RestoreBackupButton, pressed: false, focused: RestoreBackupButton.IsFocused, hovered: _hoveredButtons.Contains(RestoreBackupButton));
+        ApplyButtonState(AnalyzeExternalVaultButton, pressed: false, focused: AnalyzeExternalVaultButton.IsFocused, hovered: _hoveredButtons.Contains(AnalyzeExternalVaultButton));
         ApplyButtonState(DeleteEntryButton, pressed: false, focused: DeleteEntryButton.IsFocused, hovered: _hoveredButtons.Contains(DeleteEntryButton));
 
         StatusBadge.Text = _vaultSession.State switch
@@ -950,6 +1064,61 @@ public partial class MainPage : ContentPage
         return Application.Current?.Resources.TryGetValue(key, out var value) == true && value is Color color
             ? color
             : fallback;
+    }
+
+    private static bool IsExternalVaultFailure(VaultError error)
+    {
+        return error is VaultError.UnsupportedVaultFormat or VaultError.UnsupportedVaultFeatures;
+    }
+
+    private static string DescribeExternalAnalysisSummary(ExternalVaultAnalysis analysis)
+    {
+        return analysis.Kind switch
+        {
+            ExternalVaultAnalysisKind.AppManaged =>
+                "This vault was created by this app. Continue with normal unlock; no import analysis is needed.",
+            ExternalVaultAnalysisKind.ExternalReadable when analysis.CanStrictImport =>
+                $"{analysis.Entries.Count} entries readable. Password values are hidden; no unsupported features were detected.",
+            ExternalVaultAnalysisKind.ExternalReadable =>
+                $"{analysis.Entries.Count} entries readable. Password values are hidden; unsupported KeePass data blocks automatic import.",
+            _ =>
+                "The file could not be opened by the current provider. Wrong password, unsupported KDF, or corruption cannot be reliably distinguished."
+        };
+    }
+
+    private static string DescribeExternalIssues(IReadOnlyList<ExternalVaultIssue> issues)
+    {
+        if (issues.Count == 0)
+        {
+            return "Issues: none.";
+        }
+
+        var issueNames = issues
+            .Select(issue => DescribeExternalIssueKind(issue.Kind))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(6)
+            .ToArray();
+        var suffix = issues.Count > issueNames.Length
+            ? $" (+{issues.Count - issueNames.Length} more)"
+            : string.Empty;
+        return $"Issues: {string.Join(", ", issueNames)}{suffix}.";
+    }
+
+    private static string DescribeExternalIssueKind(ExternalVaultIssueKind kind)
+    {
+        return kind switch
+        {
+            ExternalVaultIssueKind.Groups => "groups",
+            ExternalVaultIssueKind.CustomFields => "custom fields",
+            ExternalVaultIssueKind.Attachments => "attachments",
+            ExternalVaultIssueKind.History => "history",
+            ExternalVaultIssueKind.Icons => "icons",
+            ExternalVaultIssueKind.AutoType => "auto-type",
+            ExternalVaultIssueKind.UnsupportedMetadata => "metadata",
+            ExternalVaultIssueKind.UnsupportedTimestamps => "timestamps",
+            ExternalVaultIssueKind.UnsupportedFormatOrKdf => "format/KDF",
+            _ => "unsupported data"
+        };
     }
 
     private void AttachButtonHoverHandlers(IVisualTreeElement element)
@@ -1127,5 +1296,42 @@ public partial class MainPage : ContentPage
             System.Globalization.CultureInfo.InvariantCulture);
 
         public string FileName => Path.GetFileName(Artifact.FilePath);
+    }
+
+    private sealed class ExternalPreviewViewModel
+    {
+        public ExternalPreviewViewModel(ExternalVaultPreviewEntry entry)
+        {
+            ServiceLabel = string.IsNullOrWhiteSpace(entry.ServiceName)
+                ? "(no title)"
+                : entry.ServiceName;
+            UsernameLabel = string.IsNullOrWhiteSpace(entry.UsernameOrEmail)
+                ? "No username"
+                : entry.UsernameOrEmail;
+
+            var signals = new List<string>
+            {
+                entry.HasPassword ? "Password present" : "No password",
+                entry.HasNotes ? "Notes present" : "No notes"
+            };
+
+            if (!string.IsNullOrWhiteSpace(entry.WebsiteUrl))
+            {
+                signals.Add(entry.WebsiteUrl);
+            }
+
+            if (entry.Tags.Count > 0)
+            {
+                signals.Add($"Tags: {string.Join(", ", entry.Tags)}");
+            }
+
+            SignalsLabel = string.Join(" | ", signals);
+        }
+
+        public string ServiceLabel { get; }
+
+        public string UsernameLabel { get; }
+
+        public string SignalsLabel { get; }
     }
 }
