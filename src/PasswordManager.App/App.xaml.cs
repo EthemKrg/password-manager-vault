@@ -1,13 +1,18 @@
+using PasswordManager.App.Services;
+
 namespace PasswordManager.App;
 
 public partial class App : Application
 {
     private readonly MainPage _mainPage;
+    private readonly ICrashProtectionService _crashProtectionService;
 
-    public App(MainPage mainPage)
+    public App(MainPage mainPage, ICrashProtectionService crashProtectionService)
     {
         InitializeComponent();
         _mainPage = mainPage;
+        _crashProtectionService = crashProtectionService;
+        _crashProtectionService.Register(_mainPage);
     }
 
     protected override Window CreateWindow(IActivationState? activationState)
