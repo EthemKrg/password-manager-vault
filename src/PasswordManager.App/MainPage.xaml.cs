@@ -6,20 +6,36 @@ namespace PasswordManager.App;
 
 public partial class MainPage : ContentPage
 {
+    private static readonly TimeSpan ClipboardClearDelay = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan PasswordRevealDelay = TimeSpan.FromSeconds(20);
+
     private readonly IVaultSession _vaultSession;
     private readonly IVaultFilePicker _filePicker;
+    private readonly IClipboardService _clipboardService;
     private readonly ObservableCollection<AccountEntry> _entries = [];
     private AccountEntry? _selectedEntry;
     private string? _pendingVaultPath;
+    private string? _trackedClipboardText;
+    private CancellationTokenSource? _clipboardCountdownCancellation;
+    private CancellationTokenSource? _passwordRevealCancellation;
+    private bool _isUpdatingRevealState;
     private bool _isBusy;
 
-    public MainPage(IVaultSession vaultSession, IVaultFilePicker filePicker)
+    public MainPage(IVaultSession vaultSession, IVaultFilePicker filePicker, IClipboardService clipboardService)
     {
         InitializeComponent();
         _vaultSession = vaultSession;
         _filePicker = filePicker;
+        _clipboardService = clipboardService;
         EntryCollection.ItemsSource = _entries;
         UpdateUi();
+    }
+
+    protected override void OnDisappearing()
+    {
+        HidePassword();
+        _ = ClearTrackedClipboardAsync(updateStatus: false);
+        base.OnDisappearing();
     }
 
     private async void OnCreateVaultClicked(object? sender, EventArgs e)
@@ -156,7 +172,30 @@ public partial class MainPage : ContentPage
 
     private void OnRevealPasswordChanged(object? sender, CheckedChangedEventArgs e)
     {
+        if (_isUpdatingRevealState)
+        {
+            return;
+        }
+
         PasswordEntry.IsPassword = !e.Value;
+        if (e.Value)
+        {
+            StartPasswordRevealAutoHide();
+        }
+        else
+        {
+            CancelPasswordRevealAutoHide();
+        }
+    }
+
+    private async void OnCopyUsernameClicked(object? sender, EventArgs e)
+    {
+        await CopySensitiveTextAsync(UsernameEntry.Text, "Username");
+    }
+
+    private async void OnCopyPasswordClicked(object? sender, EventArgs e)
+    {
+        await CopySensitiveTextAsync(PasswordEntry.Text, "Password");
     }
 
     private void OnSaveEntryClicked(object? sender, EventArgs e)
@@ -284,6 +323,8 @@ public partial class MainPage : ContentPage
                 return;
             }
 
+            HidePassword();
+            await ClearTrackedClipboardAsync(updateStatus: true);
             _pendingVaultPath = null;
             _selectedEntry = null;
             EntryCollection.SelectedItem = null;
@@ -332,9 +373,176 @@ public partial class MainPage : ContentPage
             return false;
         }
 
+        HidePassword();
         RefreshEntries();
         SetFeedback("Vault saved.");
         return true;
+    }
+
+    private async Task CopySensitiveTextAsync(string? text, string label)
+    {
+        if (!TryBeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            if (_vaultSession.State != VaultSessionState.Unlocked)
+            {
+                SetFeedback("Unlock the vault before copying.");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(text))
+            {
+                SetFeedback($"{label} is empty.");
+                return;
+            }
+
+            await _clipboardService.SetTextAsync(text);
+            StartClipboardCountdown(text);
+            SetFeedback($"{label} copied. Clipboard will clear automatically.");
+        }
+        catch (Exception)
+        {
+            SetFeedback($"{label} could not be copied.");
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    private void StartClipboardCountdown(string copiedText)
+    {
+        CancelClipboardCountdown(clearTrackedText: false);
+
+        _trackedClipboardText = copiedText;
+        _clipboardCountdownCancellation = new CancellationTokenSource();
+        ClipboardStatusLabel.IsVisible = true;
+        _ = RunClipboardCountdownAsync(copiedText, _clipboardCountdownCancellation.Token);
+    }
+
+    private async Task RunClipboardCountdownAsync(string copiedText, CancellationToken cancellationToken)
+    {
+        try
+        {
+            for (var remainingSeconds = (int)ClipboardClearDelay.TotalSeconds; remainingSeconds > 0; remainingSeconds--)
+            {
+                ClipboardStatusLabel.Text = $"Clipboard clears in {remainingSeconds}s";
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+
+                var currentClipboard = await _clipboardService.GetTextAsync();
+                if (!StringComparer.Ordinal.Equals(currentClipboard, copiedText))
+                {
+                    ClearClipboardTracking("Clipboard changed; auto-clear cancelled.");
+                    return;
+                }
+            }
+
+            var cleared = await _clipboardService.ClearIfCurrentAsync(copiedText);
+            ClearClipboardTracking(cleared ? "Clipboard cleared." : "Clipboard changed; auto-clear cancelled.");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            ClearClipboardTracking("Clipboard auto-clear failed.");
+        }
+    }
+
+    private async Task ClearTrackedClipboardAsync(bool updateStatus)
+    {
+        var trackedText = _trackedClipboardText;
+        CancelClipboardCountdown(clearTrackedText: true);
+
+        if (string.IsNullOrEmpty(trackedText))
+        {
+            return;
+        }
+
+        try
+        {
+            var cleared = await _clipboardService.ClearIfCurrentAsync(trackedText);
+            if (updateStatus)
+            {
+                ClipboardStatusLabel.IsVisible = true;
+                ClipboardStatusLabel.Text = cleared ? "Clipboard cleared." : "Clipboard changed; auto-clear cancelled.";
+            }
+        }
+        catch (Exception)
+        {
+            if (updateStatus)
+            {
+                ClipboardStatusLabel.IsVisible = true;
+                ClipboardStatusLabel.Text = "Clipboard auto-clear failed.";
+            }
+        }
+    }
+
+    private void CancelClipboardCountdown(bool clearTrackedText)
+    {
+        _clipboardCountdownCancellation?.Cancel();
+        _clipboardCountdownCancellation?.Dispose();
+        _clipboardCountdownCancellation = null;
+
+        if (clearTrackedText)
+        {
+            _trackedClipboardText = null;
+        }
+    }
+
+    private void ClearClipboardTracking(string status)
+    {
+        CancelClipboardCountdown(clearTrackedText: true);
+        ClipboardStatusLabel.IsVisible = true;
+        ClipboardStatusLabel.Text = status;
+    }
+
+    private void StartPasswordRevealAutoHide()
+    {
+        CancelPasswordRevealAutoHide();
+
+        _passwordRevealCancellation = new CancellationTokenSource();
+        _ = RunPasswordRevealAutoHideAsync(_passwordRevealCancellation.Token);
+    }
+
+    private async Task RunPasswordRevealAutoHideAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(PasswordRevealDelay, cancellationToken);
+            HidePassword(cancelTimer: false);
+            SetFeedback("Password hidden.");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void HidePassword(bool cancelTimer = true)
+    {
+        if (cancelTimer)
+        {
+            CancelPasswordRevealAutoHide();
+        }
+
+        PasswordEntry.IsPassword = true;
+        if (RevealPasswordCheckBox.IsChecked)
+        {
+            _isUpdatingRevealState = true;
+            RevealPasswordCheckBox.IsChecked = false;
+            _isUpdatingRevealState = false;
+        }
+    }
+
+    private void CancelPasswordRevealAutoHide()
+    {
+        _passwordRevealCancellation?.Cancel();
+        _passwordRevealCancellation?.Dispose();
+        _passwordRevealCancellation = null;
     }
 
     private void AddEntryFromForm()
@@ -351,6 +559,7 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        HidePassword();
         _selectedEntry = result.Value;
         RefreshEntries(selectEntryId: result.Value!.Id);
         SetFeedback("Entry added. Save the vault to persist changes.");
@@ -390,6 +599,7 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        HidePassword();
         RefreshEntries(selectEntryId: updatedEntry.Id);
         SetFeedback("Entry updated. Save the vault to persist changes.");
     }
@@ -465,6 +675,7 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        HidePassword();
         DetailTitleLabel.Text = _selectedEntry.ServiceName;
         DetailUsernameLabel.Text = _selectedEntry.UsernameOrEmail.Length == 0
             ? "No username set"
@@ -482,14 +693,13 @@ public partial class MainPage : ContentPage
 
     private void ClearEntryForm()
     {
+        HidePassword();
         DetailTitleLabel.Text = "New entry";
         DetailUsernameLabel.Text = "Fill the required fields, then add or update.";
         ServiceNameEntry.Text = string.Empty;
         WebsiteUrlEntry.Text = string.Empty;
         UsernameEntry.Text = string.Empty;
         PasswordEntry.Text = string.Empty;
-        RevealPasswordCheckBox.IsChecked = false;
-        PasswordEntry.IsPassword = true;
         FavoriteCheckBox.IsChecked = false;
         NotesEditor.Text = string.Empty;
         TagsEntry.Text = string.Empty;
