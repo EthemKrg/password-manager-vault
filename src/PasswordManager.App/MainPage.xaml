@@ -556,7 +556,8 @@
                     </Grid>
                 </Border>
 
-                <Border Grid.Column="2"
+                <Border x:Name="DetailPanel"
+                        Grid.Column="2"
                         Style="{StaticResource Panel}">
                     <ScrollView>
                         <VerticalStackLayout Spacing="12">
